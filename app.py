@@ -251,11 +251,18 @@ SCENARIO_TABLE = URIP_MODEL[
     "scenarios"
 ].copy()
 
-SCENARIOS = (
-    SCENARIO_TABLE[
-        "scenario"
-    ]
-    .tolist()
+# ---------------------------------------------------------
+# SCENARIOS
+# ---------------------------------------------------------
+
+SCENARIO_TABLE = URIP_MODEL["scenarios"]
+
+SCENARIOS = list(SCENARIO_TABLE.keys())
+
+DEFAULT_SCENARIO = "Normal"
+
+if DEFAULT_SCENARIO not in SCENARIOS:
+    DEFAULT_SCENARIO = SCENARIOS[0]
 )
 
 
