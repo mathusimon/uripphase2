@@ -45,7 +45,65 @@ st.set_page_config(
 # CONSTANTS
 # ============================================================
 
-MODEL_PATH = "URIP_MODEL.pkl"
+# ============================================================
+# URIP MODEL LOADER
+# ============================================================
+
+from pathlib import Path
+import gzip
+import pickle
+import streamlit as st
+
+BASE_DIR = Path(__file__).resolve().parent
+
+MODEL_GZ = BASE_DIR / "URIP_MODEL.pkl.gz"
+MODEL_PKL = BASE_DIR / "URIP_MODEL.pkl"
+
+
+@st.cache_resource
+def load_urip_model():
+
+    # Preferred: compressed frozen model
+    if MODEL_GZ.exists():
+
+        with gzip.open(MODEL_GZ, "rb") as f:
+            model = pickle.load(f)
+
+        return model, MODEL_GZ.name
+
+    # Fallback: uncompressed model
+    if MODEL_PKL.exists():
+
+        with open(MODEL_PKL, "rb") as f:
+            model = pickle.load(f)
+
+        return model, MODEL_PKL.name
+
+    return None, None
+
+
+URIP_MODEL, MODEL_FILE = load_urip_model()
+
+
+if URIP_MODEL is None:
+
+    st.error("Frozen URIP model not found.")
+
+    st.markdown(
+        """
+        The dashboard requires the frozen analytical model.
+
+        Expected file:
+
+        `URIP_MODEL.pkl.gz`
+
+        or:
+
+        `URIP_MODEL.pkl`
+        """
+    )
+
+    st.stop()
 
 CRS_METRIC = "EPSG:32737"
 CRS_GEO = "EPSG:4326"
