@@ -4,6 +4,7 @@ import base64
 import gzip
 import io
 import pickle
+import textwrap
 from pathlib import Path
 
 import folium
@@ -152,6 +153,17 @@ def fmt_minutes(value):
 def fmt_pct(value):
     value = safe_float(value)
     return "—" if np.isnan(value) else f"{value:,.1f}%"
+
+
+def render_html(html, target=None):
+    """
+    st.markdown(unsafe_allow_html=True) treats any line indented by
+    4+ spaces as a Markdown code block, which breaks HTML strings
+    built from indented f-strings. Dedent first so nested blocks
+    (loops, ifs) don't accidentally trigger that. `target` lets this
+    be used on st itself or on a column/container object.
+    """
+    (target or st).markdown(textwrap.dedent(html).strip(), unsafe_allow_html=True)
 
 
 def get_df(obj):
@@ -852,7 +864,7 @@ def build_map(scenario, map_mode, incident_id):
 # UI STYLES
 # ============================================================
 
-st.markdown(
+render_html(
     """
     <style>
     .main-title {
@@ -937,8 +949,7 @@ st.markdown(
         margin-top: 1.5rem;
     }
     </style>
-    """,
-    unsafe_allow_html=True,
+    """
 )
 
 # ============================================================
@@ -946,14 +957,13 @@ st.markdown(
 # ============================================================
 
 st.markdown('<div class="main-title">🌍 URIP</div>', unsafe_allow_html=True)
-st.markdown(
+render_html(
     """
     <div class="subtitle">
         Urban Resilience Intelligence Platform —
         Flood, traffic and emergency-response intelligence for Nairobi CBD.
     </div>
-    """,
-    unsafe_allow_html=True,
+    """
 )
 st.success("Complete frozen URIP dashboard package detected.")
 
@@ -1029,14 +1039,14 @@ status_fields = [
 ]
 
 for col, (title, value) in zip(status_cols, status_fields):
-    col.markdown(
+    render_html(
         f"""
         <div class="status-card">
             <div class="status-title">{title}</div>
             <div class="status-value">{value}</div>
         </div>
         """,
-        unsafe_allow_html=True,
+        target=col,
     )
 
 if len(kpi_row):
@@ -1078,14 +1088,13 @@ if len(incident_report):
     recommended_response = incident_report.get("recommended_facility_response_time_min", np.nan)
     recommended_route_time = incident_report.get("recommended_route_response_time_min", np.nan)
 
-    st.markdown(
+    render_html(
         f"""
         <div class="incident-header">
             <b>{incident_id}</b> &nbsp; • &nbsp; {scenario} &nbsp; • &nbsp;
             Recommended facility: <b>{recommended_facility or "—"}</b>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     route_length = safe_float(incident_report.get("recommended_route_length_m", np.nan))
@@ -1120,7 +1129,7 @@ else:
 
         is_recommended = str(recommended_facility_id) == facility_id
 
-        st.markdown(
+        render_html(
             f"""
             <div class="facility-card">
                 <div class="facility-rank">
@@ -1139,17 +1148,15 @@ else:
                     <b>Reachable:</b> {"Yes" if reachable else "No"}
                 </div>
             </div>
-            """,
-            unsafe_allow_html=True,
+            """
         )
 
         # Routes belonging to this facility
         route_options = get_route_options(scenario, incident_id, facility_rank)
 
         if len(route_options) == 0:
-            st.markdown(
-                '<div class="route-row">No frozen route alternative is available for this facility.</div>',
-                unsafe_allow_html=True,
+            render_html(
+                '<div class="route-row">No frozen route alternative is available for this facility.</div>'
             )
             continue
 
@@ -1166,7 +1173,7 @@ else:
             )
             route_class = "route-row recommended-route" if recommended else "route-row"
 
-            st.markdown(
+            render_html(
                 f"""
                 <div class="{route_class}">
                     <b>Route {route_rank}</b>
@@ -1182,8 +1189,7 @@ else:
                     &nbsp; | &nbsp;
                     Delay: <b>{fmt_pct(delay_pct)}</b>
                 </div>
-                """,
-                unsafe_allow_html=True,
+                """
             )
 
 # ============================================================
@@ -1197,7 +1203,7 @@ summary_cols = st.columns(4)
 for col, current_scenario in zip(summary_cols, SCENARIOS):
     row = get_emergency_kpi(current_scenario)
 
-    col.markdown(
+    render_html(
         f"""
         <div class="status-card">
             <div class="status-title">{current_scenario}</div>
@@ -1209,14 +1215,14 @@ for col, current_scenario in zip(summary_cols, SCENARIOS):
             </div>
         </div>
         """,
-        unsafe_allow_html=True,
+        target=col,
     )
 
 # ============================================================
 # MODEL NOTE
 # ============================================================
 
-st.markdown(
+render_html(
     """
     <div class="model-note">
         <b>URIP frozen-model dashboard.</b>
@@ -1230,6 +1236,5 @@ st.markdown(
         Affected route segments indicate flood-affected segments and do not
         necessarily mean that the segment is closed.
     </div>
-    """,
-    unsafe_allow_html=True,
-) 
+    """
+)
