@@ -225,6 +225,18 @@ def load_model():
 
 URIP_MODEL = load_model()
 
+st.write("### MODEL DEBUG")
+
+for key, value in URIP_MODEL.items():
+    st.write(f"**{key}**")
+
+    if isinstance(value, pd.DataFrame):
+        st.write("DataFrame columns:", list(value.columns))
+        st.write("Shape:", value.shape)
+
+    elif isinstance(value, dict):
+        st.write("Dictionary keys:", list(value.keys())[:20])
+
 
 # ============================================================
 # MODEL METADATA
