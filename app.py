@@ -4,8 +4,11 @@
 # URIP — URBAN RESILIENCE INTELLIGENCE PLATFORM
 # Nairobi CBD Emergency Response Simulation
 #
-# UI / VISUALIZATION LAYER ONLY
-# No analytical recalculation is performed here.
+# STREAMLIT VISUALIZATION LAYER
+#
+# IMPORTANT:
+# - This application does NOT recalculate the URIP model.
+# - It only loads and visualizes frozen outputs.
 # ============================================================
 
 import os
@@ -201,7 +204,7 @@ st.markdown(
 
 
 # ============================================================
-# LOAD FROZEN MODEL
+# LOAD MODEL
 # ============================================================
 
 @st.cache_resource
@@ -213,61 +216,41 @@ def load_model():
         )
         st.stop()
 
-    with open(
-        MODEL_PATH,
-        "rb"
-    ) as f:
+    try:
 
-        model = pickle.load(f)
+        with open(
+            MODEL_PATH,
+            "rb"
+        ) as f:
+
+            model = pickle.load(f)
+
+    except Exception as exc:
+
+        st.error(
+            "The frozen URIP model could not be loaded."
+        )
+
+        st.exception(exc)
+
+        st.stop()
+
+    if not isinstance(model, dict):
+
+        st.error(
+            "URIP_MODEL.pkl does not contain the expected dictionary package."
+        )
+
+        st.stop()
 
     return model
 
 
 URIP_MODEL = load_model()
 
-st.write("### MODEL DEBUG")
-
-for key, value in URIP_MODEL.items():
-    st.write(f"**{key}**")
-
-    if isinstance(value, pd.DataFrame):
-        st.write("DataFrame columns:", list(value.columns))
-        st.write("Shape:", value.shape)
-
-    elif isinstance(value, dict):
-        st.write("Dictionary keys:", list(value.keys())[:20])
-
 
 # ============================================================
-# MODEL METADATA
-# ============================================================
-
-METADATA = URIP_MODEL.get(
-    "metadata",
-    {}
-)
-
-SCENARIO_TABLE = URIP_MODEL[
-    "scenarios"
-].copy()
-
-# ---------------------------------------------------------
-# SCENARIOS
-# ---------------------------------------------------------
-
-SCENARIO_TABLE = URIP_MODEL["scenarios"]
-
-SCENARIOS = list(SCENARIO_TABLE.keys())
-
-DEFAULT_SCENARIO = "Normal"
-
-if DEFAULT_SCENARIO not in SCENARIOS:
-    DEFAULT_SCENARIO = SCENARIOS[0]
-)
-
-
-# ============================================================
-# HELPERS
+# GENERIC HELPERS
 # ============================================================
 
 def safe_float(
@@ -276,6 +259,9 @@ def safe_float(
 ):
 
     try:
+
+        if value is None:
+            return default
 
         if pd.isna(value):
             return default
@@ -295,78 +281,392 @@ def format_number(
     if value is None:
         return "—"
 
-    if isinstance(
-        value,
-        (float, np.floating)
-    ):
+    try:
+
+        value = float(value)
 
         return f"{value:,.{decimals}f}"
 
-    try:
-
-        return f"{float(value):,.{decimals}f}"
-
-    except:
+    except Exception:
 
         return str(value)
 
+
+def get_dict(
+    parent,
+    key
+):
+
+    if isinstance(parent, dict):
+
+        value = parent.get(
+            key,
+            {}
+        )
+
+        if isinstance(value, dict):
+            return value
+
+    return {}
+
+
+def get_table(
+    parent,
+    key
+):
+
+    if not isinstance(parent, dict):
+        return None
+
+    value = parent.get(key)
+
+    if isinstance(value, pd.DataFrame):
+        return value
+
+    if isinstance(value, gpd.GeoDataFrame):
+        return value
+
+    return None
+
+
+def filter_scenario(
+    table,
+    scenario
+):
+
+    if table is None:
+        return None
+
+    if not hasattr(
+        table,
+        "columns"
+    ):
+        return None
+
+    if "scenario" not in table.columns:
+        return table
+
+    result = table[
+        table["scenario"] == scenario
+    ].copy()
+
+    return result
+
+
+def first_row(
+    table
+):
+
+    if table is None:
+        return None
+
+    if len(table) == 0:
+        return None
+
+    return table.iloc[0]
+
+
+def value_from(
+    row,
+    *keys,
+    default=None
+):
+
+    if row is None:
+        return default
+
+    for key in keys:
+
+        try:
+
+            if isinstance(
+                row,
+                dict
+            ):
+
+                if key in row:
+                    return row[key]
+
+            elif key in row.index:
+
+                value = row[key]
+
+                if not pd.isna(value):
+                    return value
+
+        except Exception:
+
+            pass
+
+    return default
+
+
+# ============================================================
+# MODEL STRUCTURE
+# ============================================================
+
+METADATA = get_dict(
+    URIP_MODEL,
+    "metadata"
+)
+
+THRESHOLDS = get_dict(
+    URIP_MODEL,
+    "thresholds"
+)
+
+SCENARIO_DATA = get_dict(
+    URIP_MODEL,
+    "scenarios"
+)
+
+POPULATION_DATA = get_dict(
+    URIP_MODEL,
+    "population"
+)
+
+FACILITY_DATA = get_dict(
+    URIP_MODEL,
+    "facilities"
+)
+
+
+# ============================================================
+# SCENARIOS
+# ============================================================
+
+SCENARIOS = list(
+    SCENARIO_DATA.keys()
+)
+
+if not SCENARIOS:
+
+    SCENARIOS = [
+        "Normal",
+        "Moderate Rainfall",
+        "Heavy Rainfall",
+        "Severe Rainfall"
+    ]
+
+DEFAULT_SCENARIO = (
+    "Normal"
+    if "Normal" in SCENARIOS
+    else SCENARIOS[0]
+)
+
+
+# ============================================================
+# SCENARIO ACCESS
+# ============================================================
+
+def get_scenario_object(
+    scenario
+):
+
+    return SCENARIO_DATA.get(
+        scenario,
+        {}
+    )
+
+
+def get_scenario_table(
+    scenario,
+    possible_keys=None
+):
+
+    scenario_object = (
+        get_scenario_object(
+            scenario
+        )
+    )
+
+    if isinstance(
+        scenario_object,
+        pd.DataFrame
+    ):
+
+        return scenario_object
+
+    if isinstance(
+        scenario_object,
+        gpd.GeoDataFrame
+    ):
+
+        return scenario_object
+
+    if isinstance(
+        scenario_object,
+        dict
+    ):
+
+        keys = (
+            possible_keys
+            or []
+        )
+
+        for key in keys:
+
+            value = (
+                scenario_object.get(
+                    key
+                )
+            )
+
+            if isinstance(
+                value,
+                (
+                    pd.DataFrame,
+                    gpd.GeoDataFrame
+                )
+            ):
+
+                return value
+
+    return None
+
+
+# ============================================================
+# SUMMARY ACCESS
+# ============================================================
 
 def get_summary_row(
     scenario
 ):
 
-    summary = URIP_MODEL[
+    summary = URIP_MODEL.get(
         "summary"
-    ]
+    )
 
-    row = summary[
-        summary["scenario"] == scenario
-    ]
+    if isinstance(
+        summary,
+        pd.DataFrame
+    ):
 
-    if row.empty:
-        return None
+        if "scenario" in summary.columns:
 
-    return row.iloc[0]
+            rows = summary[
+                summary["scenario"]
+                == scenario
+            ]
+
+            return first_row(rows)
+
+        return first_row(summary)
+
+    scenario_object = (
+        get_scenario_object(
+            scenario
+        )
+    )
+
+    if isinstance(
+        scenario_object,
+        dict
+    ):
+
+        for key in [
+            "summary",
+            "kpi",
+            "kpis",
+            "dashboard",
+            "dashboard_summary"
+        ]:
+
+            value = (
+                scenario_object.get(
+                    key
+                )
+            )
+
+            if isinstance(
+                value,
+                pd.DataFrame
+            ):
+
+                return first_row(value)
+
+            if isinstance(
+                value,
+                dict
+            ):
+
+                return value
+
+    return scenario_object
+
+
+# ============================================================
+# EMERGENCY ACCESSORS
+# ============================================================
+
+def get_emergency_section():
+
+    section = URIP_MODEL.get(
+        "emergency"
+    )
+
+    if isinstance(
+        section,
+        dict
+    ):
+
+        return section
+
+    return {}
 
 
 def get_emergency_kpi(
     scenario
 ):
 
-    table = URIP_MODEL[
-        "emergency"
-    ][
+    emergency = (
+        get_emergency_section()
+    )
+
+    table = emergency.get(
         "kpis"
-    ]
+    )
 
-    row = table[
-        table["scenario"] == scenario
-    ]
+    if isinstance(
+        table,
+        pd.DataFrame
+    ):
 
-    if row.empty:
-        return None
+        return first_row(
+            table[
+                table["scenario"]
+                == scenario
+            ]
+        )
 
-    return row.iloc[0]
+    return None
 
 
 def get_emergency_situation(
     scenario
 ):
 
-    table = URIP_MODEL[
-        "emergency"
-    ][
+    emergency = (
+        get_emergency_section()
+    )
+
+    table = emergency.get(
         "situation_report"
-    ]
+    )
 
-    row = table[
-        table["scenario"] == scenario
-    ]
+    if isinstance(
+        table,
+        pd.DataFrame
+    ):
 
-    if row.empty:
-        return None
+        return first_row(
+            table[
+                table["scenario"]
+                == scenario
+            ]
+        )
 
-    return row.iloc[0]
+    return None
 
 
 def get_incident_report(
@@ -374,68 +674,227 @@ def get_incident_report(
     incident_id
 ):
 
-    table = URIP_MODEL[
-        "emergency"
-    ][
+    emergency = (
+        get_emergency_section()
+    )
+
+    table = emergency.get(
         "incident_report"
-    ]
+    )
 
-    row = table[
-        (table["scenario"] == scenario)
-        &
-        (table["incident_id"] == incident_id)
-    ]
+    if not isinstance(
+        table,
+        pd.DataFrame
+    ):
 
-    if row.empty:
         return None
 
-    return row.iloc[0]
+    if (
+        "scenario" not in table.columns
+        or
+        "incident_id" not in table.columns
+    ):
 
+        return None
 
-# ============================================================
-# INCIDENTS
-# ============================================================
-
-INCIDENTS = (
-    URIP_MODEL[
-        "incidents"
-    ][
-        "points"
-    ][
-        "incident_id"
+    rows = table[
+        (table["scenario"] == scenario)
+        &
+        (
+            table["incident_id"]
+            == incident_id
+        )
     ]
-    .tolist()
-)
+
+    return first_row(rows)
 
 
 # ============================================================
-# FACILITY OPTIONS
+# INCIDENT ACCESS
 # ============================================================
+
+def get_incidents():
+
+    incidents = URIP_MODEL.get(
+        "incidents"
+    )
+
+    if isinstance(
+        incidents,
+        dict
+    ):
+
+        points = incidents.get(
+            "points"
+        )
+
+        if isinstance(
+            points,
+            (
+                pd.DataFrame,
+                gpd.GeoDataFrame
+            )
+        ):
+
+            if "incident_id" in points.columns:
+
+                return points
+
+    for scenario in SCENARIOS:
+
+        obj = get_scenario_object(
+            scenario
+        )
+
+        if isinstance(
+            obj,
+            dict
+        ):
+
+            for key in [
+                "incidents",
+                "incident_points",
+                "points"
+            ]:
+
+                points = obj.get(key)
+
+                if isinstance(
+                    points,
+                    (
+                        pd.DataFrame,
+                        gpd.GeoDataFrame
+                    )
+                ):
+
+                    if "incident_id" in points.columns:
+
+                        return points
+
+    return None
+
+
+INCIDENTS_GDF = get_incidents()
+
+if INCIDENTS_GDF is not None:
+
+    INCIDENTS = (
+        INCIDENTS_GDF[
+            "incident_id"
+        ]
+        .astype(str)
+        .tolist()
+    )
+
+else:
+
+    INCIDENTS = [
+        f"INC_{i:03d}"
+        for i in range(1, 21)
+    ]
+
+
+# ============================================================
+# FACILITY ACCESS
+# ============================================================
+
+def get_facilities():
+
+    base = FACILITY_DATA.get(
+        "base"
+    )
+
+    if isinstance(
+        base,
+        (
+            pd.DataFrame,
+            gpd.GeoDataFrame
+        )
+    ):
+
+        return base.copy()
+
+    if isinstance(
+        base,
+        dict
+    ):
+
+        for key in [
+            "gdf",
+            "facilities",
+            "data"
+        ]:
+
+            value = base.get(key)
+
+            if isinstance(
+                value,
+                (
+                    pd.DataFrame,
+                    gpd.GeoDataFrame
+                )
+            ):
+
+                return value.copy()
+
+    return None
+
+
+FACILITIES_GDF = get_facilities()
+
 
 def get_facility_options(
     scenario,
     incident_id
 ):
 
-    table = URIP_MODEL[
+    table = URIP_MODEL.get(
         "facility_options"
+    )
+
+    if not isinstance(
+        table,
+        pd.DataFrame
+    ):
+
+        return pd.DataFrame()
+
+    required = [
+        "scenario",
+        "incident_id"
     ]
+
+    if not all(
+        c in table.columns
+        for c in required
+    ):
+
+        return pd.DataFrame()
 
     result = table[
         (table["scenario"] == scenario)
         &
-        (table["incident_id"] == incident_id)
+        (
+            table["incident_id"]
+            == incident_id
+        )
     ].copy()
 
-    return (
-        result
-        .sort_values("facility_rank")
-        .head(3)
-    )
+    if "facility_rank" in result.columns:
+
+        result = (
+            result
+            .sort_values(
+                "facility_rank"
+            )
+            .head(3)
+        )
+
+    return result
 
 
 # ============================================================
-# ROUTE OPTIONS
+# ROUTE ACCESS
 # ============================================================
 
 def get_routes_for_facility(
@@ -444,16 +903,48 @@ def get_routes_for_facility(
     facility_rank
 ):
 
-    table = URIP_MODEL[
+    routes_section = URIP_MODEL.get(
         "routes"
-    ][
+    )
+
+    if not isinstance(
+        routes_section,
+        dict
+    ):
+
+        return pd.DataFrame()
+
+    table = routes_section.get(
         "alternatives"
+    )
+
+    if not isinstance(
+        table,
+        pd.DataFrame
+    ):
+
+        return pd.DataFrame()
+
+    required = [
+        "scenario",
+        "incident_id",
+        "facility_rank"
     ]
+
+    if not all(
+        c in table.columns
+        for c in required
+    ):
+
+        return pd.DataFrame()
 
     result = table[
         (table["scenario"] == scenario)
         &
-        (table["incident_id"] == incident_id)
+        (
+            table["incident_id"]
+            == incident_id
+        )
         &
         (
             table["facility_rank"]
@@ -461,11 +952,17 @@ def get_routes_for_facility(
         )
     ].copy()
 
-    return (
-        result
-        .sort_values("route_rank")
-        .head(3)
-    )
+    if "route_rank" in result.columns:
+
+        result = (
+            result
+            .sort_values(
+                "route_rank"
+            )
+            .head(3)
+        )
+
+    return result
 
 
 # ============================================================
@@ -480,7 +977,6 @@ def kpi_card(
 
     return f"""
     <div class="kpi-card">
-
         <div class="kpi-label">
             {label}
         </div>
@@ -492,13 +988,12 @@ def kpi_card(
         <div class="kpi-unit">
             {unit}
         </div>
-
     </div>
     """
 
 
 # ============================================================
-# MAP — FLOOD RASTER
+# FLOOD MAP
 # ============================================================
 
 def add_flood_layer(
@@ -506,17 +1001,41 @@ def add_flood_layer(
     scenario
 ):
 
-    raster = np.asarray(
-        URIP_MODEL[
-            "flood"
-        ][scenario],
-        dtype=float
+    flood = URIP_MODEL.get(
+        "flood"
     )
+
+    if not isinstance(
+        flood,
+        dict
+    ):
+
+        return
+
+    raster = flood.get(
+        scenario
+    )
+
+    if raster is None:
+        return
+
+    try:
+
+        raster = np.asarray(
+            raster,
+            dtype=float
+        )
+
+    except Exception:
+
+        return
 
     if raster.ndim != 2:
         return
 
-    valid = np.isfinite(raster)
+    valid = np.isfinite(
+        raster
+    )
 
     if not valid.any():
         return
@@ -555,7 +1074,6 @@ def add_flood_layer(
         dtype=np.uint8
     )
 
-    # Blue flood ramp
     rgba[:, :, 0] = (
         210 - 180 * norm
     ).astype(np.uint8)
@@ -572,13 +1090,9 @@ def add_flood_layer(
         0
     ).astype(np.uint8)
 
-    # --------------------------------------------------------
-    # Recover authoritative flood bounds.
-    # --------------------------------------------------------
-
     bounds = [
-        [-1.3149999999999973, 36.79],
-        [-1.2600000000000051, 36.85]
+        [-1.315, 36.79],
+        [-1.260, 36.85]
     ]
 
     folium.raster_layers.ImageOverlay(
@@ -593,31 +1107,24 @@ def add_flood_layer(
 
 
 # ============================================================
-# MAP — ANALYSIS BOUNDARY
+# FLOOD ANALYSIS BOUNDARY
 # ============================================================
 
 def add_analysis_boundary(
-    m,
-    scenario
+    m
 ):
 
     bounds = [
-        [-1.3149999999999973, 36.79],
-        [-1.2600000000000051, 36.85]
+        [-1.315, 36.79],
+        [-1.260, 36.85]
     ]
 
-    south = bounds[0][0]
-    west = bounds[0][1]
-
-    north = bounds[1][0]
-    east = bounds[1][1]
-
     coordinates = [
-        [south, west],
-        [south, east],
-        [north, east],
-        [north, west],
-        [south, west]
+        [bounds[0][0], bounds[0][1]],
+        [bounds[0][0], bounds[1][1]],
+        [bounds[1][0], bounds[1][1]],
+        [bounds[1][0], bounds[0][1]],
+        [bounds[0][0], bounds[0][1]]
     ]
 
     group = folium.FeatureGroup(
@@ -629,7 +1136,7 @@ def add_analysis_boundary(
         coordinates,
         color="#1f2937",
         weight=5,
-        opacity=0.4
+        opacity=0.45
     ).add_to(group)
 
     folium.PolyLine(
@@ -637,33 +1144,102 @@ def add_analysis_boundary(
         color="#ffffff",
         weight=3,
         opacity=1,
-        dash_array="8,6",
-        tooltip=(
-            f"Flood Analysis Boundary — "
-            f"{scenario}"
-        )
+        dash_array="8,6"
     ).add_to(group)
 
     group.add_to(m)
 
 
 # ============================================================
-# MAP — ROADS
+# ROADS
 # ============================================================
+
+def get_roads(
+    scenario
+):
+
+    roads_section = URIP_MODEL.get(
+        "roads"
+    )
+
+    if isinstance(
+        roads_section,
+        dict
+    ):
+
+        roads = roads_section.get(
+            scenario
+        )
+
+        if isinstance(
+            roads,
+            (
+                pd.DataFrame,
+                gpd.GeoDataFrame
+            )
+        ):
+
+            return roads.copy()
+
+    scenario_object = (
+        get_scenario_object(
+            scenario
+        )
+    )
+
+    if isinstance(
+        scenario_object,
+        dict
+    ):
+
+        for key in [
+            "roads",
+            "road_network",
+            "road_results"
+        ]:
+
+            roads = scenario_object.get(
+                key
+            )
+
+            if isinstance(
+                roads,
+                (
+                    pd.DataFrame,
+                    gpd.GeoDataFrame
+                )
+            ):
+
+                return roads.copy()
+
+    return None
+
 
 def add_roads(
     m,
     scenario
 ):
 
-    roads = (
-        URIP_MODEL[
-            "roads"
-        ][scenario]
-        .copy()
+    roads = get_roads(
+        scenario
     )
 
+    if roads is None:
+        return
+
+    if (
+        not isinstance(
+            roads,
+            gpd.GeoDataFrame
+        )
+        or
+        roads.crs is None
+    ):
+
+        return
+
     if roads.crs != CRS_GEO:
+
         roads = roads.to_crs(
             CRS_GEO
         )
@@ -674,25 +1250,25 @@ def add_roads(
         ~roads.geometry.is_empty
     ]
 
+    if roads.empty:
+        return
+
     candidates = [
         "passability_class",
         "passability",
         "road_status",
         "disruption_class",
-        "road_disruption",
+        "road_disruption"
     ]
 
-    passability_column = None
+    status_column = None
 
-    for col in candidates:
+    for column in candidates:
 
-        if col in roads.columns:
-            passability_column = col
+        if column in roads.columns:
+
+            status_column = column
             break
-
-    # --------------------------------------------------------
-    # Only serialize useful attributes.
-    # --------------------------------------------------------
 
     columns = [
         "geometry",
@@ -706,7 +1282,7 @@ def add_roads(
         "disruption_class",
         "travel_time_min",
         "final_vc",
-        "congestion_class",
+        "congestion_class"
     ]
 
     columns = [
@@ -718,11 +1294,11 @@ def add_roads(
         columns
     ].copy()
 
-    fields = [
+    tooltip_fields = [
         c for c in [
             "road_id",
             "flood_impact",
-            passability_column,
+            status_column,
             "final_vc",
             "congestion_class"
         ]
@@ -737,25 +1313,28 @@ def add_roads(
             "_",
             " "
         ).title()
-        for c in fields
+        for c in tooltip_fields
     ]
 
     def style_function(
         feature
     ):
 
-        if passability_column:
+        properties = (
+            feature.get(
+                "properties",
+                {}
+            )
+        )
 
-            status = feature[
-                "properties"
-            ].get(
-                passability_column,
+        status = (
+            properties.get(
+                status_column,
                 "No Data"
             )
-
-        else:
-
-            status = "No Data"
+            if status_column
+            else "No Data"
+        )
 
         return {
             "color": ROAD_COLORS.get(
@@ -764,7 +1343,8 @@ def add_roads(
             ),
             "weight": (
                 1.2
-                if str(status) == "Passable"
+                if str(status)
+                == "Passable"
                 else 2.8
             ),
             "opacity": 0.85
@@ -775,30 +1355,32 @@ def add_roads(
         show=True
     )
 
+    tooltip = None
+
+    if tooltip_fields:
+
+        tooltip = folium.GeoJsonTooltip(
+            fields=tooltip_fields,
+            aliases=aliases,
+            localize=True
+        )
+
     folium.GeoJson(
         roads_map.to_json(),
         style_function=style_function,
-        highlight_function=lambda f: {
+        highlight_function=lambda feature: {
             "color": "#ffffff",
             "weight": 4,
             "opacity": 1
         },
-        tooltip=(
-            folium.GeoJsonTooltip(
-                fields=fields,
-                aliases=aliases,
-                localize=True
-            )
-            if fields
-            else None
-        )
+        tooltip=tooltip
     ).add_to(group)
 
     group.add_to(m)
 
 
 # ============================================================
-# MAP — FACILITIES
+# FACILITIES
 # ============================================================
 
 def add_facilities(
@@ -807,14 +1389,25 @@ def add_facilities(
     selected_facility_id=None
 ):
 
-    facilities = (
-        URIP_MODEL[
-            "facilities"
-        ][scenario]
-        .copy()
-    )
+    facilities = FACILITIES_GDF
+
+    if facilities is None:
+        return
+
+    facilities = facilities.copy()
+
+    if not isinstance(
+        facilities,
+        gpd.GeoDataFrame
+    ):
+
+        return
+
+    if facilities.crs is None:
+        return
 
     if facilities.crs != CRS_GEO:
+
         facilities = facilities.to_crs(
             CRS_GEO
         )
@@ -829,6 +1422,9 @@ def add_facilities(
         geometry = row.geometry
 
         if geometry is None:
+            continue
+
+        if geometry.is_empty:
             continue
 
         facility_id = str(
@@ -866,6 +1462,16 @@ def add_facilities(
             )
         )
 
+        color = (
+            "#00ff88"
+            if selected
+            else (
+                "#c0392b"
+                if affected
+                else "#2471a3"
+            )
+        )
+
         popup = f"""
         <div style="font-family:Arial;width:270px">
 
@@ -882,13 +1488,19 @@ def add_facilities(
 
         <b>Response time:</b>
         {safe_float(
-            row.get("response_time", np.nan),
+            row.get(
+                "response_time",
+                np.nan
+            ),
             np.nan
         ):.2f} min<br>
 
         <b>Response delay:</b>
         {safe_float(
-            row.get("response_delay", np.nan),
+            row.get(
+                "response_delay",
+                np.nan
+            ),
             np.nan
         ):.2f} min<br>
 
@@ -903,30 +1515,10 @@ def add_facilities(
                 geometry.y,
                 geometry.x
             ],
-            radius=(
-                9
-                if selected
-                else 5
-            ),
-            color=(
-                "#00ff88"
-                if selected
-                else (
-                    "#c0392b"
-                    if affected
-                    else "#2471a3"
-                )
-            ),
+            radius=9 if selected else 5,
+            color=color,
             fill=True,
-            fill_color=(
-                "#00ff88"
-                if selected
-                else (
-                    "#c0392b"
-                    if affected
-                    else "#2471a3"
-                )
-            ),
+            fill_color=color,
             fill_opacity=0.95,
             weight=2,
             tooltip=(
@@ -943,7 +1535,7 @@ def add_facilities(
 
 
 # ============================================================
-# MAP — INCIDENTS
+# INCIDENTS
 # ============================================================
 
 def add_incidents(
@@ -952,27 +1544,21 @@ def add_incidents(
     incident_id
 ):
 
-    incidents = (
-        URIP_MODEL[
-            "incidents"
-        ][
-            "points"
-        ]
-        .copy()
-    )
+    incidents = INCIDENTS_GDF
+
+    if incidents is None:
+        return
+
+    if incidents.crs is None:
+        return
+
+    incidents = incidents.copy()
 
     if incidents.crs != CRS_GEO:
+
         incidents = incidents.to_crs(
             CRS_GEO
         )
-
-    report = (
-        URIP_MODEL[
-            "emergency"
-        ][
-            "incident_report"
-        ]
-    )
 
     group = folium.FeatureGroup(
         name="Emergency Incidents",
@@ -982,26 +1568,25 @@ def add_incidents(
     for _, row in incidents.iterrows():
 
         current_id = str(
-            row["incident_id"]
+            row.get(
+                "incident_id",
+                ""
+            )
         )
 
         selected = (
             current_id
-            == str(incident_id)
+            == str(
+                incident_id
+            )
         )
 
-        details = report[
-            (report["scenario"] == scenario)
-            &
-            (
-                report["incident_id"]
-                == current_id
-            )
-        ]
+        report = get_incident_report(
+            scenario,
+            current_id
+        )
 
-        if not details.empty:
-
-            d = details.iloc[0]
+        if report is not None:
 
             popup = f"""
             <div style="font-family:Arial;width:270px">
@@ -1011,49 +1596,55 @@ def add_incidents(
             <b>Scenario:</b> {scenario}<br>
 
             <b>Incident flood class:</b>
-            {d.get(
+            {value_from(
+                report,
                 "incident_flood_class",
-                "—"
+                default="—"
             )}<br>
 
             <b>Flood impact:</b>
             {safe_float(
-                d.get(
+                value_from(
+                    report,
                     "incident_flood_impact",
-                    np.nan
+                    default=np.nan
                 ),
                 np.nan
             ):.3f}<br>
 
             <b>Catchment population:</b>
             {safe_float(
-                d.get(
+                value_from(
+                    report,
                     "population_in_catchment",
-                    0
+                    default=0
                 )
             ):,.0f}<br>
 
             <b>Flood exposed:</b>
             {safe_float(
-                d.get(
+                value_from(
+                    report,
                     "flood_exposed_population",
-                    0
+                    default=0
                 )
             ):,.0f}<br>
 
             <b>Access disrupted:</b>
             {safe_float(
-                d.get(
+                value_from(
+                    report,
                     "access_disrupted_population",
-                    0
+                    default=0
                 )
             ):,.0f}<br>
 
             <b>Priority population:</b>
             {safe_float(
-                d.get(
+                value_from(
+                    report,
                     "priority_population",
-                    0
+                    default=0
                 )
             ):,.0f}
 
@@ -1100,7 +1691,7 @@ def add_incidents(
 
 
 # ============================================================
-# MAP — RESPONSE ROUTE
+# RESPONSE ROUTE
 # ============================================================
 
 def add_response_route(
@@ -1109,13 +1700,41 @@ def add_response_route(
     incident_id
 ):
 
-    routes = (
-        URIP_MODEL[
-            "routes"
-        ][
-            "alternatives"
-        ]
+    routes_section = URIP_MODEL.get(
+        "routes"
     )
+
+    if not isinstance(
+        routes_section,
+        dict
+    ):
+
+        return None
+
+    routes = routes_section.get(
+        "alternatives"
+    )
+
+    if not isinstance(
+        routes,
+        pd.DataFrame
+    ):
+
+        return None
+
+    required = [
+        "scenario",
+        "incident_id",
+        "facility_rank",
+        "route_rank"
+    ]
+
+    if not all(
+        c in routes.columns
+        for c in required
+    ):
+
+        return None
 
     result = routes[
         (routes["scenario"] == scenario)
@@ -1141,27 +1760,26 @@ def add_response_route(
 
     route = result.iloc[0]
 
-    facility_id = route[
+    facility_id = route.get(
         "facility_id"
-    ]
+    )
 
     geometry = route.get(
-        "geometry",
-        None
+        "geometry"
     )
 
-    group = folium.FeatureGroup(
-        name="Emergency Response Route",
-        show=True
-    )
+    if geometry is None:
+        return facility_id
 
-    if geometry is not None:
+    try:
 
         route_gdf = gpd.GeoDataFrame(
             [route],
             geometry="geometry",
             crs=CRS_METRIC
-        ).to_crs(
+        )
+
+        route_gdf = route_gdf.to_crs(
             CRS_GEO
         )
 
@@ -1169,11 +1787,14 @@ def add_response_route(
             route_gdf.geometry.iloc[0]
         )
 
+        group = folium.FeatureGroup(
+            name="Emergency Response Route",
+            show=True
+        )
+
         folium.GeoJson(
-            mapping(
-                route_geometry
-            ),
-            style_function=lambda f: {
+            mapping(route_geometry),
+            style_function=lambda feature: {
                 "color": "#00ffff",
                 "weight": 6,
                 "opacity": 0.95
@@ -1181,18 +1802,25 @@ def add_response_route(
             tooltip=(
                 "Recommended response route | "
                 f"{safe_float(
-                    route['response_time_min']
+                    route.get(
+                        'response_time_min',
+                        0
+                    )
                 ):.2f} min"
             )
         ).add_to(group)
 
-    group.add_to(m)
+        group.add_to(m)
+
+    except Exception:
+
+        pass
 
     return facility_id
 
 
 # ============================================================
-# BUILD MAP
+# MAP
 # ============================================================
 
 def build_map(
@@ -1224,87 +1852,91 @@ def build_map(
             "and the GIS User Community"
         ),
         name="ESRI Satellite",
-        overlay=False
+        overlay=False,
+        control=True
     ).add_to(m)
 
     folium.TileLayer(
         "OpenStreetMap",
         name="Street Map",
-        overlay=False
+        overlay=False,
+        control=True
     ).add_to(m)
 
     # --------------------------------------------------------
-    # Flood
+    # Flood scenario mode
     # --------------------------------------------------------
 
-    add_flood_layer(
-        m,
-        scenario
-    )
+    if map_mode == "Flood Scenario":
 
-    add_analysis_boundary(
-        m,
-        scenario
-    )
+        add_flood_layer(
+            m,
+            scenario
+        )
 
-    # --------------------------------------------------------
-    # Roads
-    # --------------------------------------------------------
+        add_analysis_boundary(
+            m
+        )
 
-    add_roads(
-        m,
-        scenario
-    )
+        add_roads(
+            m,
+            scenario
+        )
 
-    # --------------------------------------------------------
-    # Incident
-    # --------------------------------------------------------
+        add_facilities(
+            m,
+            scenario
+        )
 
-    incident_report = get_incident_report(
-        scenario,
-        incident_id
-    )
-
-    selected_facility_id = None
-
-    if incident_report is not None:
-
-        selected_facility_id = (
-            incident_report.get(
-                "recommended_facility_id",
-                None
-            )
+        add_incidents(
+            m,
+            scenario,
+            incident_id
         )
 
     # --------------------------------------------------------
-    # Facilities
+    # Emergency response mode
     # --------------------------------------------------------
 
-    add_facilities(
-        m,
-        scenario,
-        selected_facility_id
-    )
+    else:
 
-    # --------------------------------------------------------
-    # Incidents
-    # --------------------------------------------------------
+        add_roads(
+            m,
+            scenario
+        )
 
-    add_incidents(
-        m,
-        scenario,
-        incident_id
-    )
+        add_facilities(
+            m,
+            scenario
+        )
 
-    # --------------------------------------------------------
-    # Response
-    # --------------------------------------------------------
+        add_incidents(
+            m,
+            scenario,
+            incident_id
+        )
 
-    add_response_route(
-        m,
-        scenario,
-        incident_id
-    )
+        incident_report = (
+            get_incident_report(
+                scenario,
+                incident_id
+            )
+        )
+
+        selected_facility_id = None
+
+        if incident_report is not None:
+
+            selected_facility_id = value_from(
+                incident_report,
+                "recommended_facility_id"
+            )
+
+        add_response_route(
+            m,
+            scenario,
+            incident_id
+        )
 
     # --------------------------------------------------------
     # Legend
@@ -1451,10 +2083,8 @@ with st.sidebar:
         "Rainfall Scenario",
         SCENARIOS,
         index=SCENARIOS.index(
-            "Normal"
+            DEFAULT_SCENARIO
         )
-        if "Normal" in SCENARIOS
-        else 0
     )
 
     map_mode = st.radio(
@@ -1473,53 +2103,41 @@ with st.sidebar:
 
     st.markdown("---")
 
-    metadata_items = [
-        (
-            "Model",
-            METADATA.get(
-                "model_version",
-                "URIP"
-            )
-        ),
-        (
-            "Study Area",
-            METADATA.get(
-                "study_area",
-                "Nairobi CBD"
-            )
-        ),
-        (
-            "Analysis CRS",
-            METADATA.get(
-                "analysis_crs",
-                CRS_METRIC
-            )
-        ),
-        (
-            "Population",
-            METADATA.get(
-                "population_type",
-                "Estimated Daytime Population"
-            )
-        ),
-        (
-            "Traffic",
-            METADATA.get(
-                "traffic_type",
-                "Modelled Traffic Volume"
-            )
-        ),
-    ]
+    st.caption(
+        f"**Study Area:** "
+        f"{METADATA.get(
+            'study_area',
+            'Nairobi CBD'
+        )}"
+    )
 
-    for label, value in metadata_items:
+    st.caption(
+        f"**Analysis CRS:** "
+        f"{METADATA.get(
+            'analysis_crs',
+            CRS_METRIC
+        )}"
+    )
 
-        st.caption(
-            f"**{label}:** {value}"
-        )
+    st.caption(
+        f"**Population:** "
+        f"{METADATA.get(
+            'population_type',
+            'Estimated Daytime Population'
+        )}"
+    )
+
+    st.caption(
+        f"**Traffic:** "
+        f"{METADATA.get(
+            'traffic_type',
+            'Modelled Traffic Volume'
+        )}"
+    )
 
 
 # ============================================================
-# HEADER
+# CURRENT DATA
 # ============================================================
 
 scenario_row = get_summary_row(
@@ -1530,8 +2148,10 @@ emergency_kpi = get_emergency_kpi(
     scenario
 )
 
-emergency_situation = get_emergency_situation(
-    scenario
+emergency_situation = (
+    get_emergency_situation(
+        scenario
+    )
 )
 
 incident = get_incident_report(
@@ -1539,6 +2159,17 @@ incident = get_incident_report(
     incident_id
 )
 
+
+# ============================================================
+# HEADER
+# ============================================================
+
+rainfall = value_from(
+    scenario_row,
+    "rainfall_mm_hr",
+    "rainfall",
+    default=0
+)
 
 st.markdown(
     f"""
@@ -1559,17 +2190,22 @@ st.markdown(
             font-size:0.85rem;
             opacity:0.82;
         ">
-            Scenario: <b>{scenario}</b>
+
+            Scenario:
+            <b>{scenario}</b>
+
             &nbsp; • &nbsp;
+
             Rainfall:
             <b>{safe_float(
-                scenario_row.get(
-                    "rainfall_mm_hr",
-                    0
-                )
+                rainfall
             ):,.0f} mm/hr</b>
+
             &nbsp; • &nbsp;
-            Map: <b>{map_mode}</b>
+
+            Map:
+            <b>{map_mode}</b>
+
         </div>
 
     </div>
@@ -1579,85 +2215,102 @@ st.markdown(
 
 
 # ============================================================
-# CORE KPI ROW
+# CORE KPIs
 # ============================================================
 
-if scenario_row is not None:
+st.markdown(
+    '<div class="section-title">Urban Resilience Indicators</div>',
+    unsafe_allow_html=True
+)
 
-    cols = st.columns(5)
+cols = st.columns(5)
 
-    values = [
-        (
-            "Flood Impact",
-            format_number(
-                scenario_row.get(
-                    "mean_flood_impact",
-                    0
+core_values = [
+
+    (
+        "Flood Impact",
+        value_from(
+            scenario_row,
+            "mean_flood_impact",
+            "flood_impact",
+            default=0
+        ),
+        "mean score",
+        3
+    ),
+
+    (
+        "Roads Affected",
+        value_from(
+            scenario_row,
+            "roads_affected",
+            "affected_roads",
+            default=0
+        ),
+        "roads",
+        0
+    ),
+
+    (
+        "Roads Closed",
+        value_from(
+            scenario_row,
+            "roads_closed",
+            "closed_roads",
+            default=0
+        ),
+        "roads",
+        0
+    ),
+
+    (
+        "Mean V/C",
+        value_from(
+            scenario_row,
+            "mean_vc",
+            "mean_final_vc",
+            default=0
+        ),
+        "volume / capacity",
+        2
+    ),
+
+    (
+        "Facilities Affected",
+        value_from(
+            scenario_row,
+            "facilities_affected",
+            "operationally_affected_facilities",
+            default=0
+        ),
+        "facilities",
+        0
+    )
+]
+
+
+for col, item in zip(
+    cols,
+    core_values
+):
+
+    with col:
+
+        st.markdown(
+            kpi_card(
+                item[0],
+                format_number(
+                    item[1],
+                    item[3]
                 ),
-                3
+                item[2]
             ),
-            "mean score"
-        ),
-        (
-            "Roads Affected",
-            format_number(
-                scenario_row.get(
-                    "roads_affected",
-                    0
-                )
-            ),
-            "roads"
-        ),
-        (
-            "Roads Closed",
-            format_number(
-                scenario_row.get(
-                    "roads_closed",
-                    0
-                )
-            ),
-            "roads"
-        ),
-        (
-            "Mean V/C",
-            format_number(
-                scenario_row.get(
-                    "mean_vc",
-                    0
-                ),
-                2
-            ),
-            "volume / capacity"
-        ),
-        (
-            "Facilities Affected",
-            format_number(
-                scenario_row.get(
-                    "facilities_affected",
-                    0
-                )
-            ),
-            "facilities"
-        ),
-    ]
-
-    for col, item in zip(
-        cols,
-        values
-    ):
-
-        with col:
-
-            st.markdown(
-                kpi_card(
-                    *item
-                ),
-                unsafe_allow_html=True
-            )
+            unsafe_allow_html=True
+        )
 
 
 # ============================================================
-# POPULATION / EMERGENCY KPIS
+# POPULATION / EMERGENCY KPIs
 # ============================================================
 
 st.markdown(
@@ -1668,47 +2321,65 @@ st.markdown(
 cols = st.columns(5)
 
 population_values = [
+
     (
         "Population Exposed",
-        scenario_row.get(
+        value_from(
+            scenario_row,
             "population_exposed",
-            0
+            "exposed_population",
+            default=0
         ),
-        "people"
+        "people",
+        0
     ),
+
     (
         "Access Disrupted",
-        scenario_row.get(
+        value_from(
+            scenario_row,
             "access_disrupted",
-            0
+            "access_disrupted_population",
+            default=0
         ),
-        "people"
+        "people",
+        0
     ),
+
     (
         "Priority Population",
-        scenario_row.get(
+        value_from(
+            scenario_row,
             "priority_population",
-            0
+            default=0
         ),
-        "people"
+        "people",
+        0
     ),
+
     (
         "High Priority",
-        scenario_row.get(
+        value_from(
+            scenario_row,
             "high_priority_population",
-            0
+            default=0
         ),
-        "people"
+        "people",
+        0
     ),
+
     (
         "Mean Response Time",
-        emergency_kpi.get(
+        value_from(
+            emergency_kpi,
             "mean_response_time_min",
-            0
+            default=0
         ),
-        "minutes"
-    ),
+        "minutes",
+        2
+    )
 ]
+
 
 for col, item in zip(
     cols,
@@ -1717,19 +2388,12 @@ for col, item in zip(
 
     with col:
 
-        decimals = (
-            2
-            if item[0]
-            == "Mean Response Time"
-            else 0
-        )
-
         st.markdown(
             kpi_card(
                 item[0],
                 format_number(
                     item[1],
-                    decimals
+                    item[3]
                 ),
                 item[2]
             ),
@@ -1738,7 +2402,7 @@ for col, item in zip(
 
 
 # ============================================================
-# SITUATION STATUS
+# EMERGENCY SITUATION
 # ============================================================
 
 st.markdown(
@@ -1749,37 +2413,46 @@ st.markdown(
 status_cols = st.columns(4)
 
 status_values = [
+
     (
         "Situation",
-        emergency_situation.get(
+        value_from(
+            emergency_situation,
             "situation_status",
-            "Unknown"
+            default="Operational"
         )
     ),
+
     (
         "Response Network",
-        emergency_situation.get(
+        value_from(
+            emergency_situation,
             "response_network_status",
-            "Unknown"
+            default="Unknown"
         )
     ),
+
     (
         "Facility Status",
-        emergency_situation.get(
+        value_from(
+            emergency_situation,
             "facility_status",
-            "Unknown"
+            default="Unknown"
         )
     ),
+
     (
         "Route Availability",
         f"{safe_float(
-            emergency_situation.get(
+            value_from(
+                emergency_situation,
                 "route_coverage_pct",
-                0
+                default=100
             )
         ):.1f}%"
-    ),
+    )
 ]
+
 
 for col, item in zip(
     status_cols,
@@ -1810,38 +2483,37 @@ for col, item in zip(
 # ALERT
 # ============================================================
 
-alert = emergency_kpi.get(
+alert = value_from(
+    emergency_kpi,
     "emergency_alert",
-    ""
+    default=""
 )
 
 if alert:
 
-    if (
-        "No incident-level"
-        in str(alert)
-    ):
+    alert_text = str(
+        alert
+    )
+
+    if "No incident-level" in alert_text:
 
         st.markdown(
             f"""
             <div class="info-box">
                 <b>Emergency intelligence:</b>
-                {alert}
+                {alert_text}
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    elif (
-        "High-priority"
-        in str(alert)
-    ):
+    elif "High-priority" in alert_text:
 
         st.markdown(
             f"""
             <div class="danger-box">
                 <b>Emergency alert:</b>
-                {alert}
+                {alert_text}
             </div>
             """,
             unsafe_allow_html=True
@@ -1853,7 +2525,7 @@ if alert:
             f"""
             <div class="alert-box">
                 <b>Emergency alert:</b>
-                {alert}
+                {alert_text}
             </div>
             """,
             unsafe_allow_html=True
@@ -1898,50 +2570,65 @@ if incident is not None:
     incident_cols = st.columns(5)
 
     incident_values = [
+
         (
             "Incident Flood Class",
-            incident.get(
+            value_from(
+                incident,
                 "incident_flood_class",
-                "—"
-            )
+                default="—"
+            ),
+            ""
         ),
+
         (
             "Incident Flood Impact",
             format_number(
-                incident.get(
+                value_from(
+                    incident,
                     "incident_flood_impact",
-                    np.nan
+                    default=np.nan
                 ),
                 3
-            )
+            ),
+            ""
         ),
+
         (
             "Catchment Population",
             format_number(
-                incident.get(
+                value_from(
+                    incident,
                     "population_in_catchment",
-                    0
+                    default=0
                 )
-            )
+            ),
+            ""
         ),
+
         (
             "Priority Population",
             format_number(
-                incident.get(
+                value_from(
+                    incident,
                     "priority_population",
-                    0
+                    default=0
                 )
-            )
+            ),
+            ""
         ),
+
         (
             "High Priority",
             format_number(
-                incident.get(
+                value_from(
+                    incident,
                     "high_priority_population",
-                    0
+                    default=0
                 )
-            )
-        ),
+            ),
+            ""
+        )
     ]
 
     for col, item in zip(
@@ -1955,199 +2642,194 @@ if incident is not None:
                 kpi_card(
                     item[0],
                     item[1],
-                    ""
+                    item[2]
                 ),
                 unsafe_allow_html=True
             )
 
+else:
+
+    st.info(
+        "Incident-level emergency intelligence is not available in the loaded frozen model."
+    )
+
 
 # ============================================================
-# FACILITY + ROUTE TABLE
+# FACILITY + ROUTE OPTIONS
 # ============================================================
 
-facility_options = get_facility_options(
-    scenario,
-    incident_id
+facility_options = (
+    get_facility_options(
+        scenario,
+        incident_id
+    )
 )
 
-table_rows = []
+if not facility_options.empty:
 
-
-for _, facility in facility_options.iterrows():
-
-    rank = int(
-        facility[
-            "facility_rank"
-        ]
+    st.markdown(
+        '<div class="section-title">Facility & Route Alternatives</div>',
+        unsafe_allow_html=True
     )
 
-    routes = get_routes_for_facility(
-        scenario,
-        incident_id,
-        rank
-    )
+    table_rows = []
 
-    if routes.empty:
+    for _, facility in (
+        facility_options.iterrows()
+    ):
 
-        table_rows.append({
-            "Option": f"Option {rank}",
-            "Facility": facility[
-                "facility_name"
-            ],
-            "Type": facility[
-                "facility_type"
-            ],
-            "Facility Time": (
-                safe_float(
-                    facility[
-                        "travel_time_min"
-                    ]
+        rank = int(
+            facility.get(
+                "facility_rank",
+                0
+            )
+        )
+
+        routes = (
+            get_routes_for_facility(
+                scenario,
+                incident_id,
+                rank
+            )
+        )
+
+        facility_name = value_from(
+            facility,
+            "facility_name",
+            "name",
+            default="Unknown facility"
+        )
+
+        facility_type = value_from(
+            facility,
+            "facility_type",
+            default="Facility"
+        )
+
+        facility_time = value_from(
+            facility,
+            "travel_time_min",
+            default=np.nan
+        )
+
+        facility_delay = value_from(
+            facility,
+            "response_delay_min",
+            default=np.nan
+        )
+
+        if routes.empty:
+
+            table_rows.append(
+                {
+                    "Option": f"Option {rank}",
+                    "Facility": facility_name,
+                    "Type": facility_type,
+                    "Facility Time (min)": facility_time,
+                    "Facility Delay (min)": facility_delay,
+                    "Route": "No route",
+                    "Route Time (min)": np.nan,
+                    "Route Delay (min)": np.nan,
+                    "Length (m)": np.nan,
+                    "Affected Segments": np.nan,
+                    "Closed Segments": np.nan
+                }
+            )
+
+        else:
+
+            for _, route in (
+                routes.iterrows()
+            ):
+
+                table_rows.append(
+                    {
+                        "Option": f"Option {rank}",
+                        "Facility": facility_name,
+                        "Type": facility_type,
+                        "Facility Time (min)": facility_time,
+                        "Facility Delay (min)": facility_delay,
+                        "Route": (
+                            f"Route "
+                            f"{int(
+                                route.get(
+                                    'route_rank',
+                                    0
+                                )
+                            )}"
+                        ),
+                        "Route Time (min)": value_from(
+                            route,
+                            "response_time_min",
+                            default=np.nan
+                        ),
+                        "Route Delay (min)": value_from(
+                            route,
+                            "response_delay_min",
+                            default=np.nan
+                        ),
+                        "Length (m)": value_from(
+                            route,
+                            "route_length_m",
+                            default=np.nan
+                        ),
+                        "Affected Segments": value_from(
+                            route,
+                            "affected_segments",
+                            default=np.nan
+                        ),
+                        "Closed Segments": value_from(
+                            route,
+                            "closed_segments",
+                            default=np.nan
+                        )
+                    }
                 )
-            ),
-            "Facility Delay": (
-                safe_float(
-                    facility[
-                        "response_delay_min"
-                    ]
-                )
-            ),
-            "Route": "No route",
-            "Route Time": np.nan,
-            "Route Delay": np.nan,
-            "Length": np.nan,
-            "Affected": np.nan,
-            "Closed": np.nan
-        })
-
-    else:
-
-        for _, route in routes.iterrows():
-
-            table_rows.append({
-                "Option": f"Option {rank}",
-                "Facility": facility[
-                    "facility_name"
-                ],
-                "Type": facility[
-                    "facility_type"
-                ],
-                "Facility Time": (
-                    safe_float(
-                        facility[
-                            "travel_time_min"
-                        ]
-                    )
-                ),
-                "Facility Delay": (
-                    safe_float(
-                        facility[
-                            "response_delay_min"
-                        ]
-                    )
-                ),
-                "Route": (
-                    f"Route "
-                    f"{int(
-                        route['route_rank']
-                    )}"
-                ),
-                "Route Time": (
-                    safe_float(
-                        route[
-                            "response_time_min"
-                        ]
-                    )
-                ),
-                "Route Delay": (
-                    safe_float(
-                        route[
-                            "response_delay_min"
-                        ]
-                    )
-                ),
-                "Length": (
-                    safe_float(
-                        route[
-                            "route_length_m"
-                        ]
-                    )
-                ),
-                "Affected": (
-                    safe_float(
-                        route[
-                            "affected_segments"
-                        ]
-                    )
-                ),
-                "Closed": (
-                    safe_float(
-                        route[
-                            "closed_segments"
-                        ]
-                    )
-                )
-            })
-
-
-# ------------------------------------------------------------
-# Display table
-# ------------------------------------------------------------
-
-if table_rows:
 
     display_table = pd.DataFrame(
         table_rows
     )
 
-    display_table = display_table.rename(
-        columns={
-            "Option": "Option",
-            "Facility": "Facility",
-            "Type": "Type",
-            "Facility Time": "Facility Time (min)",
-            "Facility Delay": "Facility Delay (min)",
-            "Route": "Route",
-            "Route Time": "Route Time (min)",
-            "Route Delay": "Route Delay (min)",
-            "Length": "Length (m)",
-            "Affected": "Affected Segments",
-            "Closed": "Closed Segments"
-        }
-    )
-
-    # Numeric formatting
-    for col in [
+    numeric_two = [
         "Facility Time (min)",
         "Facility Delay (min)",
         "Route Time (min)",
         "Route Delay (min)",
         "Length (m)"
-    ]:
+    ]
 
-        display_table[col] = (
-            display_table[col]
-            .apply(
-                lambda x:
-                    "—"
-                    if pd.isna(x)
-                    else f"{x:,.2f}"
-            )
-        )
-
-    for col in [
+    numeric_zero = [
         "Affected Segments",
         "Closed Segments"
-    ]:
+    ]
 
-        display_table[col] = (
-            display_table[col]
-            .apply(
-                lambda x:
-                    "—"
-                    if pd.isna(x)
-                    else f"{x:,.0f}"
+    for column in numeric_two:
+
+        if column in display_table.columns:
+
+            display_table[column] = (
+                display_table[column]
+                .apply(
+                    lambda value:
+                        "—"
+                        if pd.isna(value)
+                        else f"{float(value):,.2f}"
+                )
             )
-        )
+
+    for column in numeric_zero:
+
+        if column in display_table.columns:
+
+            display_table[column] = (
+                display_table[column]
+                .apply(
+                    lambda value:
+                        "—"
+                        if pd.isna(value)
+                        else f"{float(value):,.0f}"
+                )
+            )
 
     st.dataframe(
         display_table,
@@ -2158,37 +2840,109 @@ if table_rows:
 
 
 # ============================================================
-# MODEL NOTE
+# MODEL INFORMATION
 # ============================================================
+
+st.markdown(
+    '<div class="section-title">Model Information</div>',
+    unsafe_allow_html=True
+)
+
+model_name = METADATA.get(
+    "name",
+    "Urban Resilience Intelligence Platform"
+)
+
+model_version = METADATA.get(
+    "model_version",
+    "URIP"
+)
+
+study_area = METADATA.get(
+    "study_area",
+    "Nairobi CBD"
+)
+
+catchment_distance = METADATA.get(
+    "catchment_distance_m",
+    1000
+)
+
+vc_cap = METADATA.get(
+    "emergency_vc_cap",
+    2.0
+)
 
 st.markdown(
     f"""
     <div class="info-box">
 
-    <b>Model note:</b>
-    URIP is displaying frozen model outputs from
-    <b>{METADATA.get(
-        "model_version",
-        "URIP"
-    )}</b>.
+    <b>Model:</b> {model_name}<br>
+
+    <b>Version:</b> {model_version}<br>
+
+    <b>Study area:</b> {study_area}<br>
+
+    <b>Emergency catchment:</b>
+    {catchment_distance} m network distance<br>
+
+    <b>Emergency V/C cap:</b>
+    {vc_cap}<br><br>
+
+    URIP is displaying frozen analytical outputs.
     No flood, traffic, routing, population or facility
-    calculations are performed by the dashboard.
+    calculations are performed by this dashboard.
 
-    The emergency population catchment is
-    <b>{METADATA.get(
-        "catchment_distance_m",
-        1000
-    )} m network distance</b>
-    using the normal network as the reference catchment.
-
-    The emergency V/C threshold is a
-    <b>URIP modelling assumption</b>,
-    not an official Nairobi operational standard.
+    The emergency catchment and V/C threshold are
+    URIP modelling parameters and should not be interpreted
+    as official Nairobi operational standards.
 
     </div>
     """,
     unsafe_allow_html=True
 )
+
+
+# ============================================================
+# MODEL VALIDATION MESSAGE
+# ============================================================
+
+expected_sections = [
+    "flood",
+    "roads",
+    "incidents",
+    "facility_options",
+    "routes",
+    "emergency",
+    "summary"
+]
+
+missing_sections = [
+    key
+    for key in expected_sections
+    if key not in URIP_MODEL
+]
+
+if missing_sections:
+
+    st.markdown(
+        '<div class="section-title">Model Package Notice</div>',
+        unsafe_allow_html=True
+    )
+
+    st.warning(
+        "The loaded URIP_MODEL.pkl does not contain all "
+        "dashboard output sections. Missing sections: "
+        + ", ".join(missing_sections)
+    )
+
+    st.caption(
+        "The dashboard will display whatever frozen "
+        "outputs are available, but map and emergency "
+        "intelligence components requiring those sections "
+        "cannot be rendered until the complete frozen "
+        "dashboard package is uploaded."
+    )
 
 
 # ============================================================
@@ -2198,12 +2952,17 @@ st.markdown(
 st.markdown(
     """
     <div class="footer">
+
         URIP — Urban Resilience Intelligence Platform
         · Nairobi CBD Emergency Response Simulation
-        · Frozen analytical model / interactive decision-support interface
+
+        <br>
+
+        Frozen analytical model
+        · Interactive decision-support interface
+
     </div>
     """,
     unsafe_allow_html=True
 )
-
         
