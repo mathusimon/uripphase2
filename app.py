@@ -1,15 +1,29 @@
 
+```python
+# ============================================================
+# URIP — URBAN RESILIENCE INTELLIGENCE PLATFORM
+# Nairobi CBD Emergency Response Simulation
+#
+# UI / VISUALIZATION LAYER ONLY
+# No analytical recalculation is performed here.
+# ============================================================
+
 import os
-import json
 import pickle
+import warnings
+
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 import streamlit as st
 import folium
 
+from shapely.geometry import mapping
 from streamlit_folium import st_folium
-from branca.colormap import linear
+from folium import Element
+
+
+warnings.filterwarnings("ignore")
 
 
 # ============================================================
@@ -17,237 +31,1528 @@ from branca.colormap import linear
 # ============================================================
 
 st.set_page_config(
-    page_title="URIP — Nairobi Emergency Response",
+    page_title="URIP | Urban Resilience Intelligence",
     page_icon="🌍",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 
 # ============================================================
-# PATHS
+# CONSTANTS
 # ============================================================
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = "URIP_MODEL.pkl"
 
-MODEL_PATH = os.path.join(
-    BASE_DIR,
-    "URIP_MODEL.pkl"
-)
+CRS_METRIC = "EPSG:32737"
+CRS_GEO = "EPSG:4326"
 
-SUMMARY_PATH = os.path.join(
-    BASE_DIR,
-    "dashboard_summary.csv"
-)
+MAP_CENTER = [-1.2864, 36.8172]
+MAP_ZOOM = 13
 
-ROADS_PATH = os.path.join(
-    BASE_DIR,
-    "roads.geojson"
-)
-
-FACILITIES_PATH = os.path.join(
-    BASE_DIR,
-    "facilities.geojson"
-)
-
-POPULATION_PATH = os.path.join(
-    BASE_DIR,
-    "population_display.pkl"
-)
-
-ROUTES_PATH = os.path.join(
-    BASE_DIR,
-    "route_geometries.pkl"
-)
-
-ROUTE_COMPARISON_PATH = os.path.join(
-    BASE_DIR,
-    "route_comparisons.pkl"
-)
-
-METADATA_PATH = os.path.join(
-    BASE_DIR,
-    "metadata.json"
-)
+ROAD_COLORS = {
+    "Passable": "#2ca25f",
+    "Minor Disruption": "#fdae6b",
+    "Severe Disruption": "#e34a33",
+    "Closed": "#7f0000",
+    "No Data": "#969696",
+}
 
 
 # ============================================================
-# LOAD DATA
+# CUSTOM CSS
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+
+    .main {
+        background-color: #f7f9fb;
+    }
+
+    .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 2rem;
+    }
+
+    .urip-header {
+        background:
+            linear-gradient(
+                135deg,
+                #0b3d2e 0%,
+                #145a43 55%,
+                #1f7a59 100%
+            );
+        padding: 1.35rem 1.6rem;
+        border-radius: 14px;
+        color: white;
+        margin-bottom: 1.1rem;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+    }
+
+    .urip-title {
+        font-size: 2rem;
+        font-weight: 700;
+        margin-bottom: 0.15rem;
+    }
+
+    .urip-subtitle {
+        font-size: 0.95rem;
+        opacity: 0.88;
+    }
+
+    .kpi-card {
+        background: white;
+        border: 1px solid #e5e9ee;
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
+        min-height: 105px;
+        box-shadow: 0 2px 7px rgba(0,0,0,0.05);
+    }
+
+    .kpi-label {
+        color: #6b7280;
+        font-size: 0.76rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .kpi-value {
+        color: #17202a;
+        font-size: 1.55rem;
+        font-weight: 700;
+        margin-top: 0.25rem;
+    }
+
+    .kpi-unit {
+        color: #6b7280;
+        font-size: 0.72rem;
+    }
+
+    .status-card {
+        background: white;
+        border-radius: 12px;
+        border: 1px solid #e5e9ee;
+        padding: 1rem 1.1rem;
+        min-height: 100px;
+    }
+
+    .status-title {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        color: #6b7280;
+        font-weight: 600;
+    }
+
+    .status-value {
+        font-size: 1.15rem;
+        font-weight: 700;
+        margin-top: 0.35rem;
+    }
+
+    .section-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #17202a;
+        margin-top: 1.1rem;
+        margin-bottom: 0.6rem;
+    }
+
+    .info-box {
+        background: #eef6f2;
+        border-left: 4px solid #1f7a59;
+        padding: 0.8rem 1rem;
+        border-radius: 7px;
+        color: #24352d;
+        font-size: 0.86rem;
+    }
+
+    .alert-box {
+        background: #fff4e5;
+        border-left: 4px solid #f39c12;
+        padding: 0.8rem 1rem;
+        border-radius: 7px;
+        color: #593b08;
+        font-size: 0.86rem;
+    }
+
+    .danger-box {
+        background: #fff0f0;
+        border-left: 4px solid #c0392b;
+        padding: 0.8rem 1rem;
+        border-radius: 7px;
+        color: #5b1914;
+        font-size: 0.86rem;
+    }
+
+    .footer {
+        color: #7f8c8d;
+        font-size: 0.75rem;
+        text-align: center;
+        padding-top: 1.5rem;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# LOAD FROZEN MODEL
 # ============================================================
 
 @st.cache_resource
 def load_model():
 
-    with open(MODEL_PATH, "rb") as f:
-        return pickle.load(f)
+    if not os.path.exists(MODEL_PATH):
+        st.error(
+            f"Frozen model not found: {MODEL_PATH}"
+        )
+        st.stop()
+
+    with open(
+        MODEL_PATH,
+        "rb"
+    ) as f:
+
+        model = pickle.load(f)
+
+    return model
 
 
-@st.cache_data
-def load_summary():
-
-    return pd.read_csv(SUMMARY_PATH)
-
-
-@st.cache_data
-def load_roads():
-
-    return gpd.read_file(ROADS_PATH)
-
-
-@st.cache_data
-def load_facilities():
-
-    return gpd.read_file(FACILITIES_PATH)
-
-
-@st.cache_resource
-def load_population():
-
-    with open(POPULATION_PATH, "rb") as f:
-        return pickle.load(f)
-
-
-@st.cache_resource
-def load_routes():
-
-    with open(ROUTES_PATH, "rb") as f:
-        return pickle.load(f)
-
-
-@st.cache_resource
-def load_route_comparisons():
-
-    with open(ROUTE_COMPARISON_PATH, "rb") as f:
-        return pickle.load(f)
-
-
-@st.cache_data
-def load_metadata():
-
-    with open(METADATA_PATH, "r") as f:
-        return json.load(f)
-
-
-MODEL = load_model()
-SUMMARY = load_summary()
-ROADS = load_roads()
-FACILITIES = load_facilities()
-POPULATION = load_population()
-ROUTES = load_routes()
-ROUTE_COMPARISONS = load_route_comparisons()
-METADATA = load_metadata()
+URIP_MODEL = load_model()
 
 
 # ============================================================
-# SCENARIOS
+# MODEL METADATA
 # ============================================================
 
-SCENARIOS = [
-    "Normal",
-    "Moderate Rainfall",
-    "Heavy Rainfall",
-    "Severe Rainfall"
-]
+METADATA = URIP_MODEL.get(
+    "metadata",
+    {}
+)
 
+SCENARIO_TABLE = URIP_MODEL[
+    "scenarios"
+].copy()
 
-SCENARIO_RAINFALL = {
-    "Normal": 10,
-    "Moderate Rainfall": 30,
-    "Heavy Rainfall": 50,
-    "Severe Rainfall": 75
-}
+SCENARIOS = (
+    SCENARIO_TABLE[
+        "scenario"
+    ]
+    .tolist()
+)
 
 
 # ============================================================
-# HELPER FUNCTIONS
+# HELPERS
 # ============================================================
 
-def fmt(value, decimals=0):
+def safe_float(
+    value,
+    default=0.0
+):
+
+    try:
+
+        if pd.isna(value):
+            return default
+
+        return float(value)
+
+    except Exception:
+
+        return default
+
+
+def format_number(
+    value,
+    decimals=0
+):
 
     if value is None:
         return "—"
 
-    try:
-        value = float(value)
-
-        if not np.isfinite(value):
-            return "—"
+    if isinstance(
+        value,
+        (float, np.floating)
+    ):
 
         return f"{value:,.{decimals}f}"
 
-    except Exception:
-        return "—"
+    try:
+
+        return f"{float(value):,.{decimals}f}"
+
+    except:
+
+        return str(value)
 
 
-def scenario_row(scenario):
+def get_summary_row(
+    scenario
+):
 
-    return SUMMARY[
-        SUMMARY["scenario"] == scenario
-    ].iloc[0]
-
-
-def get_scenario_roads(scenario):
-
-    model_roads = MODEL[
-        "scenarios"
-    ][scenario]["roads"].copy()
-
-    # Add geometry from authoritative display layer.
-    display = ROADS[
-        ["road_id", "geometry"]
-    ].copy()
-
-    return display.merge(
-        model_roads,
-        on="road_id",
-        how="left"
-    )
-
-
-def get_scenario_facilities(scenario):
-
-    base = FACILITIES.copy()
-
-    scenario_facilities = MODEL[
-        "scenarios"
-    ][scenario]["facilities"].copy()
-
-    columns = [
-        c for c in scenario_facilities.columns
-        if c != "geometry"
+    summary = URIP_MODEL[
+        "summary"
     ]
 
-    return base.merge(
-        scenario_facilities[columns],
-        on="facility_id",
-        how="left"
+    row = summary[
+        summary["scenario"] == scenario
+    ]
+
+    if row.empty:
+        return None
+
+    return row.iloc[0]
+
+
+def get_emergency_kpi(
+    scenario
+):
+
+    table = URIP_MODEL[
+        "emergency"
+    ][
+        "kpis"
+    ]
+
+    row = table[
+        table["scenario"] == scenario
+    ]
+
+    if row.empty:
+        return None
+
+    return row.iloc[0]
+
+
+def get_emergency_situation(
+    scenario
+):
+
+    table = URIP_MODEL[
+        "emergency"
+    ][
+        "situation_report"
+    ]
+
+    row = table[
+        table["scenario"] == scenario
+    ]
+
+    if row.empty:
+        return None
+
+    return row.iloc[0]
+
+
+def get_incident_report(
+    scenario,
+    incident_id
+):
+
+    table = URIP_MODEL[
+        "emergency"
+    ][
+        "incident_report"
+    ]
+
+    row = table[
+        (table["scenario"] == scenario)
+        &
+        (table["incident_id"] == incident_id)
+    ]
+
+    if row.empty:
+        return None
+
+    return row.iloc[0]
+
+
+# ============================================================
+# INCIDENTS
+# ============================================================
+
+INCIDENTS = (
+    URIP_MODEL[
+        "incidents"
+    ][
+        "points"
+    ][
+        "incident_id"
+    ]
+    .tolist()
+)
+
+
+# ============================================================
+# FACILITY OPTIONS
+# ============================================================
+
+def get_facility_options(
+    scenario,
+    incident_id
+):
+
+    table = URIP_MODEL[
+        "facility_options"
+    ]
+
+    result = table[
+        (table["scenario"] == scenario)
+        &
+        (table["incident_id"] == incident_id)
+    ].copy()
+
+    return (
+        result
+        .sort_values("facility_rank")
+        .head(3)
     )
+
+
+# ============================================================
+# ROUTE OPTIONS
+# ============================================================
+
+def get_routes_for_facility(
+    scenario,
+    incident_id,
+    facility_rank
+):
+
+    table = URIP_MODEL[
+        "routes"
+    ][
+        "alternatives"
+    ]
+
+    result = table[
+        (table["scenario"] == scenario)
+        &
+        (table["incident_id"] == incident_id)
+        &
+        (
+            table["facility_rank"]
+            == facility_rank
+        )
+    ].copy()
+
+    return (
+        result
+        .sort_values("route_rank")
+        .head(3)
+    )
+
+
+# ============================================================
+# KPI CARD
+# ============================================================
+
+def kpi_card(
+    label,
+    value,
+    unit=""
+):
+
+    return f"""
+    <div class="kpi-card">
+
+        <div class="kpi-label">
+            {label}
+        </div>
+
+        <div class="kpi-value">
+            {value}
+        </div>
+
+        <div class="kpi-unit">
+            {unit}
+        </div>
+
+    </div>
+    """
+
+
+# ============================================================
+# MAP — FLOOD RASTER
+# ============================================================
+
+def add_flood_layer(
+    m,
+    scenario
+):
+
+    raster = np.asarray(
+        URIP_MODEL[
+            "flood"
+        ][scenario],
+        dtype=float
+    )
+
+    if raster.ndim != 2:
+        return
+
+    valid = np.isfinite(raster)
+
+    if not valid.any():
+        return
+
+    values = raster[valid]
+
+    vmin = np.nanmin(values)
+    vmax = np.nanmax(values)
+
+    if vmax > vmin:
+
+        norm = (
+            raster - vmin
+        ) / (
+            vmax - vmin
+        )
+
+    else:
+
+        norm = np.zeros_like(
+            raster
+        )
+
+    norm = np.clip(
+        norm,
+        0,
+        1
+    )
+
+    rgba = np.zeros(
+        (
+            raster.shape[0],
+            raster.shape[1],
+            4
+        ),
+        dtype=np.uint8
+    )
+
+    # Blue flood ramp
+    rgba[:, :, 0] = (
+        210 - 180 * norm
+    ).astype(np.uint8)
+
+    rgba[:, :, 1] = (
+        235 - 170 * norm
+    ).astype(np.uint8)
+
+    rgba[:, :, 2] = 255
+
+    rgba[:, :, 3] = np.where(
+        valid,
+        50 + 180 * norm,
+        0
+    ).astype(np.uint8)
+
+    # --------------------------------------------------------
+    # Recover authoritative flood bounds.
+    # --------------------------------------------------------
+
+    bounds = [
+        [-1.3149999999999973, 36.79],
+        [-1.2600000000000051, 36.85]
+    ]
+
+    folium.raster_layers.ImageOverlay(
+        image=rgba,
+        bounds=bounds,
+        opacity=0.70,
+        interactive=True,
+        cross_origin=False,
+        zindex=2,
+        name="Flood Impact"
+    ).add_to(m)
+
+
+# ============================================================
+# MAP — ANALYSIS BOUNDARY
+# ============================================================
+
+def add_analysis_boundary(
+    m,
+    scenario
+):
+
+    bounds = [
+        [-1.3149999999999973, 36.79],
+        [-1.2600000000000051, 36.85]
+    ]
+
+    south = bounds[0][0]
+    west = bounds[0][1]
+
+    north = bounds[1][0]
+    east = bounds[1][1]
+
+    coordinates = [
+        [south, west],
+        [south, east],
+        [north, east],
+        [north, west],
+        [south, west]
+    ]
+
+    group = folium.FeatureGroup(
+        name="Flood Analysis Boundary",
+        show=True
+    )
+
+    folium.PolyLine(
+        coordinates,
+        color="#1f2937",
+        weight=5,
+        opacity=0.4
+    ).add_to(group)
+
+    folium.PolyLine(
+        coordinates,
+        color="#ffffff",
+        weight=3,
+        opacity=1,
+        dash_array="8,6",
+        tooltip=(
+            f"Flood Analysis Boundary — "
+            f"{scenario}"
+        )
+    ).add_to(group)
+
+    group.add_to(m)
+
+
+# ============================================================
+# MAP — ROADS
+# ============================================================
+
+def add_roads(
+    m,
+    scenario
+):
+
+    roads = (
+        URIP_MODEL[
+            "roads"
+        ][scenario]
+        .copy()
+    )
+
+    if roads.crs != CRS_GEO:
+        roads = roads.to_crs(
+            CRS_GEO
+        )
+
+    roads = roads[
+        roads.geometry.notna()
+        &
+        ~roads.geometry.is_empty
+    ]
+
+    candidates = [
+        "passability_class",
+        "passability",
+        "road_status",
+        "disruption_class",
+        "road_disruption",
+    ]
+
+    passability_column = None
+
+    for col in candidates:
+
+        if col in roads.columns:
+            passability_column = col
+            break
+
+    # --------------------------------------------------------
+    # Only serialize useful attributes.
+    # --------------------------------------------------------
+
+    columns = [
+        "geometry",
+        "road_id",
+        "road_type",
+        "highway",
+        "flood_impact",
+        "passability_class",
+        "passability",
+        "road_status",
+        "disruption_class",
+        "travel_time_min",
+        "final_vc",
+        "congestion_class",
+    ]
+
+    columns = [
+        c for c in columns
+        if c in roads.columns
+    ]
+
+    roads_map = roads[
+        columns
+    ].copy()
+
+    fields = [
+        c for c in [
+            "road_id",
+            "flood_impact",
+            passability_column,
+            "final_vc",
+            "congestion_class"
+        ]
+        if (
+            c is not None
+            and c in roads_map.columns
+        )
+    ]
+
+    aliases = [
+        c.replace(
+            "_",
+            " "
+        ).title()
+        for c in fields
+    ]
+
+    def style_function(
+        feature
+    ):
+
+        if passability_column:
+
+            status = feature[
+                "properties"
+            ].get(
+                passability_column,
+                "No Data"
+            )
+
+        else:
+
+            status = "No Data"
+
+        return {
+            "color": ROAD_COLORS.get(
+                str(status),
+                "#969696"
+            ),
+            "weight": (
+                1.2
+                if str(status) == "Passable"
+                else 2.8
+            ),
+            "opacity": 0.85
+        }
+
+    group = folium.FeatureGroup(
+        name="Road Network / Passability",
+        show=True
+    )
+
+    folium.GeoJson(
+        roads_map.to_json(),
+        style_function=style_function,
+        highlight_function=lambda f: {
+            "color": "#ffffff",
+            "weight": 4,
+            "opacity": 1
+        },
+        tooltip=(
+            folium.GeoJsonTooltip(
+                fields=fields,
+                aliases=aliases,
+                localize=True
+            )
+            if fields
+            else None
+        )
+    ).add_to(group)
+
+    group.add_to(m)
+
+
+# ============================================================
+# MAP — FACILITIES
+# ============================================================
+
+def add_facilities(
+    m,
+    scenario,
+    selected_facility_id=None
+):
+
+    facilities = (
+        URIP_MODEL[
+            "facilities"
+        ][scenario]
+        .copy()
+    )
+
+    if facilities.crs != CRS_GEO:
+        facilities = facilities.to_crs(
+            CRS_GEO
+        )
+
+    group = folium.FeatureGroup(
+        name="Emergency Facilities",
+        show=True
+    )
+
+    for _, row in facilities.iterrows():
+
+        geometry = row.geometry
+
+        if geometry is None:
+            continue
+
+        facility_id = str(
+            row.get(
+                "facility_id",
+                ""
+            )
+        )
+
+        name = str(
+            row.get(
+                "name",
+                facility_id
+            )
+        )
+
+        facility_type = str(
+            row.get(
+                "facility_type",
+                "Facility"
+            )
+        )
+
+        affected = bool(
+            row.get(
+                "operationally_affected",
+                False
+            )
+        )
+
+        selected = (
+            facility_id
+            == str(
+                selected_facility_id
+            )
+        )
+
+        popup = f"""
+        <div style="font-family:Arial;width:270px">
+
+        <h4>{name}</h4>
+
+        <b>Type:</b> {facility_type}<br>
+        <b>ID:</b> {facility_id}<br>
+
+        <b>Flood class:</b>
+        {row.get("flood_class", "—")}<br>
+
+        <b>Access:</b>
+        {row.get("access_status", "—")}<br>
+
+        <b>Response time:</b>
+        {safe_float(
+            row.get("response_time", np.nan),
+            np.nan
+        ):.2f} min<br>
+
+        <b>Response delay:</b>
+        {safe_float(
+            row.get("response_delay", np.nan),
+            np.nan
+        ):.2f} min<br>
+
+        <b>Operationally affected:</b>
+        {"Yes" if affected else "No"}
+
+        </div>
+        """
+
+        folium.CircleMarker(
+            location=[
+                geometry.y,
+                geometry.x
+            ],
+            radius=(
+                9
+                if selected
+                else 5
+            ),
+            color=(
+                "#00ff88"
+                if selected
+                else (
+                    "#c0392b"
+                    if affected
+                    else "#2471a3"
+                )
+            ),
+            fill=True,
+            fill_color=(
+                "#00ff88"
+                if selected
+                else (
+                    "#c0392b"
+                    if affected
+                    else "#2471a3"
+                )
+            ),
+            fill_opacity=0.95,
+            weight=2,
+            tooltip=(
+                f"{name} — "
+                f"{facility_type}"
+            ),
+            popup=folium.Popup(
+                popup,
+                max_width=320
+            )
+        ).add_to(group)
+
+    group.add_to(m)
+
+
+# ============================================================
+# MAP — INCIDENTS
+# ============================================================
+
+def add_incidents(
+    m,
+    scenario,
+    incident_id
+):
+
+    incidents = (
+        URIP_MODEL[
+            "incidents"
+        ][
+            "points"
+        ]
+        .copy()
+    )
+
+    if incidents.crs != CRS_GEO:
+        incidents = incidents.to_crs(
+            CRS_GEO
+        )
+
+    report = (
+        URIP_MODEL[
+            "emergency"
+        ][
+            "incident_report"
+        ]
+    )
+
+    group = folium.FeatureGroup(
+        name="Emergency Incidents",
+        show=True
+    )
+
+    for _, row in incidents.iterrows():
+
+        current_id = str(
+            row["incident_id"]
+        )
+
+        selected = (
+            current_id
+            == str(incident_id)
+        )
+
+        details = report[
+            (report["scenario"] == scenario)
+            &
+            (
+                report["incident_id"]
+                == current_id
+            )
+        ]
+
+        if not details.empty:
+
+            d = details.iloc[0]
+
+            popup = f"""
+            <div style="font-family:Arial;width:270px">
+
+            <h4>{current_id}</h4>
+
+            <b>Scenario:</b> {scenario}<br>
+
+            <b>Incident flood class:</b>
+            {d.get(
+                "incident_flood_class",
+                "—"
+            )}<br>
+
+            <b>Flood impact:</b>
+            {safe_float(
+                d.get(
+                    "incident_flood_impact",
+                    np.nan
+                ),
+                np.nan
+            ):.3f}<br>
+
+            <b>Catchment population:</b>
+            {safe_float(
+                d.get(
+                    "population_in_catchment",
+                    0
+                )
+            ):,.0f}<br>
+
+            <b>Flood exposed:</b>
+            {safe_float(
+                d.get(
+                    "flood_exposed_population",
+                    0
+                )
+            ):,.0f}<br>
+
+            <b>Access disrupted:</b>
+            {safe_float(
+                d.get(
+                    "access_disrupted_population",
+                    0
+                )
+            ):,.0f}<br>
+
+            <b>Priority population:</b>
+            {safe_float(
+                d.get(
+                    "priority_population",
+                    0
+                )
+            ):,.0f}
+
+            </div>
+            """
+
+        else:
+
+            popup = (
+                f"<b>{current_id}</b>"
+            )
+
+        folium.CircleMarker(
+            location=[
+                row.geometry.y,
+                row.geometry.x
+            ],
+            radius=10 if selected else 6,
+            color="#ffffff",
+            weight=3 if selected else 2,
+            fill=True,
+            fill_color=(
+                "#ff0000"
+                if selected
+                else "#ffcc00"
+            ),
+            fill_opacity=0.95,
+            tooltip=(
+                current_id
+                +
+                (
+                    " — SELECTED"
+                    if selected
+                    else ""
+                )
+            ),
+            popup=folium.Popup(
+                popup,
+                max_width=320
+            )
+        ).add_to(group)
+
+    group.add_to(m)
+
+
+# ============================================================
+# MAP — RESPONSE ROUTE
+# ============================================================
+
+def add_response_route(
+    m,
+    scenario,
+    incident_id
+):
+
+    routes = (
+        URIP_MODEL[
+            "routes"
+        ][
+            "alternatives"
+        ]
+    )
+
+    result = routes[
+        (routes["scenario"] == scenario)
+        &
+        (
+            routes["incident_id"]
+            == incident_id
+        )
+        &
+        (
+            routes["facility_rank"]
+            == 1
+        )
+        &
+        (
+            routes["route_rank"]
+            == 1
+        )
+    ]
+
+    if result.empty:
+        return None
+
+    route = result.iloc[0]
+
+    facility_id = route[
+        "facility_id"
+    ]
+
+    geometry = route.get(
+        "geometry",
+        None
+    )
+
+    group = folium.FeatureGroup(
+        name="Emergency Response Route",
+        show=True
+    )
+
+    if geometry is not None:
+
+        route_gdf = gpd.GeoDataFrame(
+            [route],
+            geometry="geometry",
+            crs=CRS_METRIC
+        ).to_crs(
+            CRS_GEO
+        )
+
+        route_geometry = (
+            route_gdf.geometry.iloc[0]
+        )
+
+        folium.GeoJson(
+            mapping(
+                route_geometry
+            ),
+            style_function=lambda f: {
+                "color": "#00ffff",
+                "weight": 6,
+                "opacity": 0.95
+            },
+            tooltip=(
+                "Recommended response route | "
+                f"{safe_float(
+                    route['response_time_min']
+                ):.2f} min"
+            )
+        ).add_to(group)
+
+    group.add_to(m)
+
+    return facility_id
+
+
+# ============================================================
+# BUILD MAP
+# ============================================================
+
+def build_map(
+    scenario,
+    map_mode,
+    incident_id
+):
+
+    m = folium.Map(
+        location=MAP_CENTER,
+        zoom_start=MAP_ZOOM,
+        control_scale=True,
+        tiles=None
+    )
+
+    # --------------------------------------------------------
+    # Basemaps
+    # --------------------------------------------------------
+
+    folium.TileLayer(
+        tiles=(
+            "https://server.arcgisonline.com/"
+            "ArcGIS/rest/services/"
+            "World_Imagery/MapServer/tile/"
+            "{z}/{y}/{x}"
+        ),
+        attr=(
+            "Esri, Maxar, Earthstar Geographics, "
+            "and the GIS User Community"
+        ),
+        name="ESRI Satellite",
+        overlay=False
+    ).add_to(m)
+
+    folium.TileLayer(
+        "OpenStreetMap",
+        name="Street Map",
+        overlay=False
+    ).add_to(m)
+
+    # --------------------------------------------------------
+    # Flood
+    # --------------------------------------------------------
+
+    add_flood_layer(
+        m,
+        scenario
+    )
+
+    add_analysis_boundary(
+        m,
+        scenario
+    )
+
+    # --------------------------------------------------------
+    # Roads
+    # --------------------------------------------------------
+
+    add_roads(
+        m,
+        scenario
+    )
+
+    # --------------------------------------------------------
+    # Incident
+    # --------------------------------------------------------
+
+    incident_report = get_incident_report(
+        scenario,
+        incident_id
+    )
+
+    selected_facility_id = None
+
+    if incident_report is not None:
+
+        selected_facility_id = (
+            incident_report.get(
+                "recommended_facility_id",
+                None
+            )
+        )
+
+    # --------------------------------------------------------
+    # Facilities
+    # --------------------------------------------------------
+
+    add_facilities(
+        m,
+        scenario,
+        selected_facility_id
+    )
+
+    # --------------------------------------------------------
+    # Incidents
+    # --------------------------------------------------------
+
+    add_incidents(
+        m,
+        scenario,
+        incident_id
+    )
+
+    # --------------------------------------------------------
+    # Response
+    # --------------------------------------------------------
+
+    add_response_route(
+        m,
+        scenario,
+        incident_id
+    )
+
+    # --------------------------------------------------------
+    # Legend
+    # --------------------------------------------------------
+
+    legend = """
+    <div style="
+        position:fixed;
+        bottom:25px;
+        left:25px;
+        z-index:9999;
+        background:white;
+        padding:13px 16px;
+        border-radius:9px;
+        box-shadow:0 2px 8px rgba(0,0,0,0.25);
+        font-family:Arial;
+        font-size:12px;
+        line-height:19px;
+    ">
+
+    <b style="font-size:13px">
+        URIP MAP LEGEND
+    </b>
+
+    <hr style="margin:6px 0">
+
+    <b>Flood Impact</b><br>
+
+    <span style="
+        background:#d2ebff;
+        width:22px;height:12px;
+        display:inline-block;
+    "></span>
+    Low<br>
+
+    <span style="
+        background:#8ac6ff;
+        width:22px;height:12px;
+        display:inline-block;
+    "></span>
+    Moderate<br>
+
+    <span style="
+        background:#3b8edb;
+        width:22px;height:12px;
+        display:inline-block;
+    "></span>
+    High<br>
+
+    <span style="
+        background:#0057a8;
+        width:22px;height:12px;
+        display:inline-block;
+    "></span>
+    Very High
+
+    <br><br>
+
+    <b>Road Status</b><br>
+
+    <span style="
+        background:#2ca25f;
+        width:22px;height:4px;
+        display:inline-block;
+    "></span>
+    Passable<br>
+
+    <span style="
+        background:#fdae6b;
+        width:22px;height:4px;
+        display:inline-block;
+    "></span>
+    Minor Disruption<br>
+
+    <span style="
+        background:#e34a33;
+        width:22px;height:4px;
+        display:inline-block;
+    "></span>
+    Severe Disruption<br>
+
+    <span style="
+        background:#7f0000;
+        width:22px;height:4px;
+        display:inline-block;
+    "></span>
+    Closed
+
+    <br><br>
+
+    <b>Emergency</b><br>
+
+    <span style="
+        background:#ffcc00;
+        width:12px;height:12px;
+        border-radius:50%;
+        display:inline-block;
+    "></span>
+    Incident<br>
+
+    <span style="
+        background:#00ffff;
+        width:22px;height:5px;
+        display:inline-block;
+    "></span>
+    Response Route<br>
+
+    <span style="
+        border:2px dashed #1f2937;
+        width:20px;height:10px;
+        display:inline-block;
+    "></span>
+    Analysis Boundary
+
+    </div>
+    """
+
+    m.get_root().html.add_child(
+        Element(legend)
+    )
+
+    folium.LayerControl(
+        collapsed=False
+    ).add_to(m)
+
+    return m
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    st.markdown(
+        "## URIP Controls"
+    )
+
+    st.caption(
+        "Urban Resilience Intelligence Platform"
+    )
+
+    scenario = st.selectbox(
+        "Rainfall Scenario",
+        SCENARIOS,
+        index=SCENARIOS.index(
+            "Normal"
+        )
+        if "Normal" in SCENARIOS
+        else 0
+    )
+
+    map_mode = st.radio(
+        "Map Mode",
+        [
+            "Flood Scenario",
+            "Emergency Response"
+        ]
+    )
+
+    incident_id = st.selectbox(
+        "Emergency Incident",
+        INCIDENTS,
+        index=0
+    )
+
+    st.markdown("---")
+
+    metadata_items = [
+        (
+            "Model",
+            METADATA.get(
+                "model_version",
+                "URIP"
+            )
+        ),
+        (
+            "Study Area",
+            METADATA.get(
+                "study_area",
+                "Nairobi CBD"
+            )
+        ),
+        (
+            "Analysis CRS",
+            METADATA.get(
+                "analysis_crs",
+                CRS_METRIC
+            )
+        ),
+        (
+            "Population",
+            METADATA.get(
+                "population_type",
+                "Estimated Daytime Population"
+            )
+        ),
+        (
+            "Traffic",
+            METADATA.get(
+                "traffic_type",
+                "Modelled Traffic Volume"
+            )
+        ),
+    ]
+
+    for label, value in metadata_items:
+
+        st.caption(
+            f"**{label}:** {value}"
+        )
 
 
 # ============================================================
 # HEADER
 # ============================================================
 
+scenario_row = get_summary_row(
+    scenario
+)
+
+emergency_kpi = get_emergency_kpi(
+    scenario
+)
+
+emergency_situation = get_emergency_situation(
+    scenario
+)
+
+incident = get_incident_report(
+    scenario,
+    incident_id
+)
+
+
 st.markdown(
-    """
-    <div style="
-        padding: 0.6rem 0 0.2rem 0;
-    ">
-        <h1 style="margin-bottom:0;">
-            🌍 URIP
-        </h1>
-        <p style="
-            font-size:1.1rem;
-            margin-top:0;
-        ">
+    f"""
+    <div class="urip-header">
+
+        <div class="urip-title">
+            URIP
+        </div>
+
+        <div class="urip-subtitle">
             Urban Resilience Intelligence Platform
-        </p>
-        <p style="
-            color:#6b7280;
-            margin-top:-0.5rem;
+            &nbsp;|&nbsp;
+            Nairobi CBD Emergency Response Simulation
+        </div>
+
+        <div style="
+            margin-top:10px;
+            font-size:0.85rem;
+            opacity:0.82;
         ">
-            Nairobi Emergency Response Simulation
-        </p>
+            Scenario: <b>{scenario}</b>
+            &nbsp; • &nbsp;
+            Rainfall:
+            <b>{safe_float(
+                scenario_row.get(
+                    "rainfall_mm_hr",
+                    0
+                )
+            ):,.0f} mm/hr</b>
+            &nbsp; • &nbsp;
+            Map: <b>{map_mode}</b>
+        </div>
+
     </div>
     """,
     unsafe_allow_html=True
@@ -255,461 +1560,633 @@ st.markdown(
 
 
 # ============================================================
-# SIDEBAR CONTROLS
+# CORE KPI ROW
 # ============================================================
 
-st.sidebar.header("Simulation Controls")
+if scenario_row is not None:
 
-scenario = st.sidebar.selectbox(
-    "Rainfall Scenario",
-    SCENARIOS,
-    index=0
-)
+    cols = st.columns(5)
 
-mode = st.sidebar.radio(
-    "Map Mode",
-    [
-        "Flood Scenario",
-        "Emergency Response"
+    values = [
+        (
+            "Flood Impact",
+            format_number(
+                scenario_row.get(
+                    "mean_flood_impact",
+                    0
+                ),
+                3
+            ),
+            "mean score"
+        ),
+        (
+            "Roads Affected",
+            format_number(
+                scenario_row.get(
+                    "roads_affected",
+                    0
+                )
+            ),
+            "roads"
+        ),
+        (
+            "Roads Closed",
+            format_number(
+                scenario_row.get(
+                    "roads_closed",
+                    0
+                )
+            ),
+            "roads"
+        ),
+        (
+            "Mean V/C",
+            format_number(
+                scenario_row.get(
+                    "mean_vc",
+                    0
+                ),
+                2
+            ),
+            "volume / capacity"
+        ),
+        (
+            "Facilities Affected",
+            format_number(
+                scenario_row.get(
+                    "facilities_affected",
+                    0
+                )
+            ),
+            "facilities"
+        ),
     ]
-)
 
+    for col, item in zip(
+        cols,
+        values
+    ):
 
-destination_id = None
+        with col:
 
-if mode == "Emergency Response":
-
-    facility_options = (
-        FACILITIES[
-            [
-                "facility_id",
-                "facility_name",
-                "facility_type"
-            ]
-        ]
-        .fillna("")
-    )
-
-    facility_options["label"] = (
-        facility_options["facility_name"]
-        + " ("
-        + facility_options["facility_type"]
-        + ") — "
-        + facility_options["facility_id"]
-    )
-
-    selected_label = st.sidebar.selectbox(
-        "Emergency Destination",
-        facility_options["label"].tolist()
-    )
-
-    destination_id = facility_options.loc[
-        facility_options["label"] == selected_label,
-        "facility_id"
-    ].iloc[0]
+            st.markdown(
+                kpi_card(
+                    *item
+                ),
+                unsafe_allow_html=True
+            )
 
 
 # ============================================================
-# KPI SECTION
+# POPULATION / EMERGENCY KPIS
 # ============================================================
 
-row = scenario_row(scenario)
-
-st.subheader(
-    f"{scenario} — {SCENARIO_RAINFALL[scenario]} mm/hr"
+st.markdown(
+    '<div class="section-title">Resilience & Emergency Indicators</div>',
+    unsafe_allow_html=True
 )
 
-k1, k2, k3, k4, k5 = st.columns(5)
+cols = st.columns(5)
 
-with k1:
-    st.metric(
-        "Roads Affected",
-        fmt(row["roads_affected"])
-    )
-
-with k2:
-    st.metric(
-        "Closed Roads",
-        fmt(row["roads_closed"])
-    )
-
-with k3:
-    st.metric(
-        "Mean V/C",
-        fmt(row["mean_vc"], 2)
-    )
-
-with k4:
-    st.metric(
-        "Facilities Affected",
-        fmt(row["facilities_operationally_affected"])
-    )
-
-with k5:
-    st.metric(
+population_values = [
+    (
         "Population Exposed",
-        fmt(row["population_exposed"])
-    )
+        scenario_row.get(
+            "population_exposed",
+            0
+        ),
+        "people"
+    ),
+    (
+        "Access Disrupted",
+        scenario_row.get(
+            "access_disrupted",
+            0
+        ),
+        "people"
+    ),
+    (
+        "Priority Population",
+        scenario_row.get(
+            "priority_population",
+            0
+        ),
+        "people"
+    ),
+    (
+        "High Priority",
+        scenario_row.get(
+            "high_priority_population",
+            0
+        ),
+        "people"
+    ),
+    (
+        "Mean Response Time",
+        emergency_kpi.get(
+            "mean_response_time_min",
+            0
+        ),
+        "minutes"
+    ),
+]
+
+for col, item in zip(
+    cols,
+    population_values
+):
+
+    with col:
+
+        decimals = (
+            2
+            if item[0]
+            == "Mean Response Time"
+            else 0
+        )
+
+        st.markdown(
+            kpi_card(
+                item[0],
+                format_number(
+                    item[1],
+                    decimals
+                ),
+                item[2]
+            ),
+            unsafe_allow_html=True
+        )
+
+
+# ============================================================
+# SITUATION STATUS
+# ============================================================
+
+st.markdown(
+    '<div class="section-title">Emergency Situation</div>',
+    unsafe_allow_html=True
+)
+
+status_cols = st.columns(4)
+
+status_values = [
+    (
+        "Situation",
+        emergency_situation.get(
+            "situation_status",
+            "Unknown"
+        )
+    ),
+    (
+        "Response Network",
+        emergency_situation.get(
+            "response_network_status",
+            "Unknown"
+        )
+    ),
+    (
+        "Facility Status",
+        emergency_situation.get(
+            "facility_status",
+            "Unknown"
+        )
+    ),
+    (
+        "Route Availability",
+        f"{safe_float(
+            emergency_situation.get(
+                "route_coverage_pct",
+                0
+            )
+        ):.1f}%"
+    ),
+]
+
+for col, item in zip(
+    status_cols,
+    status_values
+):
+
+    with col:
+
+        st.markdown(
+            f"""
+            <div class="status-card">
+
+                <div class="status-title">
+                    {item[0]}
+                </div>
+
+                <div class="status-value">
+                    {item[1]}
+                </div>
+
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+# ============================================================
+# ALERT
+# ============================================================
+
+alert = emergency_kpi.get(
+    "emergency_alert",
+    ""
+)
+
+if alert:
+
+    if (
+        "No incident-level"
+        in str(alert)
+    ):
+
+        st.markdown(
+            f"""
+            <div class="info-box">
+                <b>Emergency intelligence:</b>
+                {alert}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    elif (
+        "High-priority"
+        in str(alert)
+    ):
+
+        st.markdown(
+            f"""
+            <div class="danger-box">
+                <b>Emergency alert:</b>
+                {alert}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    else:
+
+        st.markdown(
+            f"""
+            <div class="alert-box">
+                <b>Emergency alert:</b>
+                {alert}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
 
 # ============================================================
 # MAP
 # ============================================================
 
-@st.cache_data
-def prepare_roads_for_map(_roads, scenario):
-    roads = _roads.copy()
-    return roads.to_crs("EPSG:4326")
-
-
-@st.cache_data
-def prepare_facilities_for_map(_facilities):
-    return _facilities.to_crs("EPSG:4326")
-
-
-roads_map = prepare_roads_for_map(
-    get_scenario_roads(scenario),
-    scenario
+st.markdown(
+    '<div class="section-title">Spatial Intelligence</div>',
+    unsafe_allow_html=True
 )
 
-facilities_map = prepare_facilities_for_map(
-    get_scenario_facilities(scenario)
+m = build_map(
+    scenario,
+    map_mode,
+    incident_id
 )
-
-
-# Create the Folium map BEFORE adding any layers
-m = folium.Map(
-    location=[-1.2864, 36.8172],
-    zoom_start=13,
-    tiles="CartoDB positron",
-    control_scale=True
-)
-
-
-# ============================================================
-# ROAD LAYERS
-# ============================================================
-
-road_group = folium.FeatureGroup(
-    name="Road Network",
-    show=True
-)
-
-affected_group = folium.FeatureGroup(
-    name="Affected Roads",
-    show=True
-)
-
-closed_group = folium.FeatureGroup(
-    name="Closed Roads",
-    show=True
-)
-
-
-for _, road in roads_map.iterrows():
-
-    disruption = road.get(
-        "disruption_class",
-        "No Data"
-    )
-
-    if disruption == "Closed":
-
-        color = "#dc2626"
-        weight = 4
-        target = closed_group
-
-    elif disruption == "Severe Disruption":
-
-        color = "#f97316"
-        weight = 3
-        target = affected_group
-
-    elif disruption == "Minor Disruption":
-
-        color = "#f59e0b"
-        weight = 2
-        target = affected_group
-
-    else:
-
-        color = "#6b7280"
-        weight = 1
-        target = road_group
-
-
-    name = road.get(
-        "name",
-        "Unnamed Road"
-    )
-
-    if isinstance(name, (list, tuple, np.ndarray)):
-        name = ", ".join(
-            str(x) for x in name
-        )
-
-    tooltip = (
-        f"{name}<br>"
-        f"Status: {disruption}"
-    )
-
-    folium.GeoJson(
-        road.geometry,
-        style_function=lambda feature,
-        color=color,
-        weight=weight: {
-            "color": color,
-            "weight": weight,
-            "opacity": 0.8
-        },
-        tooltip=tooltip
-    ).add_to(target)
-
-
-road_group.add_to(m)
-affected_group.add_to(m)
-closed_group.add_to(m)
-
-
-# ============================================================
-# FACILITIES
-# ============================================================
-
-facility_group = folium.FeatureGroup(
-    name="Emergency Facilities",
-    show=True
-)
-
-for _, facility in facilities_map.iterrows():
-
-    facility_name = facility.get(
-        "facility_name",
-        "Unnamed Facility"
-    )
-
-    facility_type = facility.get(
-        "facility_type",
-        "Emergency Facility"
-    )
-
-    folium.CircleMarker(
-        location=[
-            facility.geometry.y,
-            facility.geometry.x
-        ],
-        radius=5,
-        color="#2563eb",
-        fill=True,
-        fill_opacity=0.85,
-        popup=(
-            f"<b>{facility_name}</b><br>"
-            f"Type: {facility_type}<br>"
-            f"ID: {facility.get('facility_id', '')}"
-        )
-    ).add_to(facility_group)
-
-facility_group.add_to(m)
-
-
-# ============================================================
-# EMERGENCY RESPONSE ROUTE
-# ============================================================
-
-if mode == "Emergency Response":
-
-    route_data = ROUTES.get(
-        scenario
-    )
-
-    if route_data is not None:
-
-        route = route_data[
-            route_data["road_id"].isin(
-                route_data["road_id"]
-            )
-        ].copy()
-
-        route = route.to_crs(
-            "EPSG:4326"
-        )
-
-        route_group = folium.FeatureGroup(
-            name="Emergency Response Route",
-            show=True
-        )
-
-        for _, segment in route.iterrows():
-
-            passability = segment.get(
-                "passability",
-                1
-            )
-
-            if passability <= 0:
-                color = "#000000"
-
-            elif passability < 0.25:
-                color = "#dc2626"
-
-            elif passability < 1:
-                color = "#f59e0b"
-
-            else:
-                color = "#2563eb"
-
-            folium.GeoJson(
-                segment.geometry,
-                style_function=lambda feature,
-                color=color: {
-                    "color": color,
-                    "weight": 6,
-                    "opacity": 0.95
-                }
-            ).add_to(route_group)
-
-        route_group.add_to(m)
-
-
-# ============================================================
-# INCIDENT
-# ============================================================
-
-incident = MODEL.get(
-    "metadata",
-    {}
-)
-
-folium.Marker(
-    [-1.2864, 36.8172],
-    popup="Emergency Incident",
-    icon=folium.Icon(
-        color="red",
-        icon="warning-sign"
-    )
-).add_to(m)
-
-
-# ============================================================
-# LAYER CONTROL
-# ============================================================
-
-folium.LayerControl(
-    collapsed=False
-).add_to(m)
-
-
-# ============================================================
-# DISPLAY MAP
-# ============================================================
 
 st_folium(
     m,
     width=None,
-    height=650,
+    height=680,
     returned_objects=[]
 )
 
 
 # ============================================================
-# EMERGENCY RESPONSE SUMMARY
+# INCIDENT INTELLIGENCE
 # ============================================================
 
-if mode == "Emergency Response":
-
-    st.subheader(
-        "Emergency Response Intelligence"
-    )
-
-    comparison = ROUTE_COMPARISONS.get(
-        scenario
-    )
-
-    if comparison is not None:
-
-        r1, r2, r3, r4 = st.columns(4)
-
-        with r1:
-            st.metric(
-                "Normal Response",
-                f"{fmt(comparison.get('normal_time_min'), 2)} min"
-            )
-
-        with r2:
-            st.metric(
-                "Scenario Response",
-                f"{fmt(comparison.get('scenario_time_min'), 2)} min"
-            )
-
-        with r3:
-            st.metric(
-                "Response Delay",
-                f"{fmt(comparison.get('delay_min'), 2)} min"
-            )
-
-        with r4:
-            st.metric(
-                "Affected Route Segments",
-                fmt(comparison.get("affected_segments"))
-            )
-
-
-# ============================================================
-# SCENARIO COMPARISON
-# ============================================================
-
-st.subheader(
-    "Scenario Comparison"
-)
-
-comparison_columns = [
-    "scenario",
-    "rainfall_mm_hr",
-    "roads_affected",
-    "roads_severe",
-    "roads_closed",
-    "mean_vc",
-    "facilities_operationally_affected",
-    "population_exposed",
-    "population_priority",
-    "population_high_priority"
-]
-
-available_columns = [
-    c for c in comparison_columns
-    if c in SUMMARY.columns
-]
-
-display_summary = SUMMARY[
-    available_columns
-].copy()
-
-st.dataframe(
-    display_summary,
-    use_container_width=True,
-    hide_index=True
+st.markdown(
+    '<div class="section-title">Emergency Incident Intelligence</div>',
+    unsafe_allow_html=True
 )
 
 
+if incident is not None:
+
+    incident_cols = st.columns(5)
+
+    incident_values = [
+        (
+            "Incident Flood Class",
+            incident.get(
+                "incident_flood_class",
+                "—"
+            )
+        ),
+        (
+            "Incident Flood Impact",
+            format_number(
+                incident.get(
+                    "incident_flood_impact",
+                    np.nan
+                ),
+                3
+            )
+        ),
+        (
+            "Catchment Population",
+            format_number(
+                incident.get(
+                    "population_in_catchment",
+                    0
+                )
+            )
+        ),
+        (
+            "Priority Population",
+            format_number(
+                incident.get(
+                    "priority_population",
+                    0
+                )
+            )
+        ),
+        (
+            "High Priority",
+            format_number(
+                incident.get(
+                    "high_priority_population",
+                    0
+                )
+            )
+        ),
+    ]
+
+    for col, item in zip(
+        incident_cols,
+        incident_values
+    ):
+
+        with col:
+
+            st.markdown(
+                kpi_card(
+                    item[0],
+                    item[1],
+                    ""
+                ),
+                unsafe_allow_html=True
+            )
+
+
 # ============================================================
-# MODEL NOTES
+# FACILITY + ROUTE TABLE
 # ============================================================
 
-with st.expander(
-    "Model assumptions and limitations"
-):
+facility_options = get_facility_options(
+    scenario,
+    incident_id
+)
 
-    st.markdown(
-        """
-        **URIP is a simulation and decision-support prototype.**
+table_rows = []
 
-        - Traffic volumes are modelled estimates rather than
-          observed real-time traffic counts.
-        - Road capacities are modelling assumptions.
-        - Population represents estimated daytime population.
-        - Facility flood exposure uses point-based exposure.
-        - Emergency routing uses the modelled emergency network.
-        - Flood-adjusted traffic uses a BPR-style congestion model.
-        - Emergency response uses a bounded V/C assumption.
+
+for _, facility in facility_options.iterrows():
+
+    rank = int(
+        facility[
+            "facility_rank"
+        ]
+    )
+
+    routes = get_routes_for_facility(
+        scenario,
+        incident_id,
+        rank
+    )
+
+    if routes.empty:
+
+        table_rows.append({
+            "Option": f"Option {rank}",
+            "Facility": facility[
+                "facility_name"
+            ],
+            "Type": facility[
+                "facility_type"
+            ],
+            "Facility Time": (
+                safe_float(
+                    facility[
+                        "travel_time_min"
+                    ]
+                )
+            ),
+            "Facility Delay": (
+                safe_float(
+                    facility[
+                        "response_delay_min"
+                    ]
+                )
+            ),
+            "Route": "No route",
+            "Route Time": np.nan,
+            "Route Delay": np.nan,
+            "Length": np.nan,
+            "Affected": np.nan,
+            "Closed": np.nan
+        })
+
+    else:
+
+        for _, route in routes.iterrows():
+
+            table_rows.append({
+                "Option": f"Option {rank}",
+                "Facility": facility[
+                    "facility_name"
+                ],
+                "Type": facility[
+                    "facility_type"
+                ],
+                "Facility Time": (
+                    safe_float(
+                        facility[
+                            "travel_time_min"
+                        ]
+                    )
+                ),
+                "Facility Delay": (
+                    safe_float(
+                        facility[
+                            "response_delay_min"
+                        ]
+                    )
+                ),
+                "Route": (
+                    f"Route "
+                    f"{int(
+                        route['route_rank']
+                    )}"
+                ),
+                "Route Time": (
+                    safe_float(
+                        route[
+                            "response_time_min"
+                        ]
+                    )
+                ),
+                "Route Delay": (
+                    safe_float(
+                        route[
+                            "response_delay_min"
+                        ]
+                    )
+                ),
+                "Length": (
+                    safe_float(
+                        route[
+                            "route_length_m"
+                        ]
+                    )
+                ),
+                "Affected": (
+                    safe_float(
+                        route[
+                            "affected_segments"
+                        ]
+                    )
+                ),
+                "Closed": (
+                    safe_float(
+                        route[
+                            "closed_segments"
+                        ]
+                    )
+                )
+            })
+
+
+# ------------------------------------------------------------
+# Display table
+# ------------------------------------------------------------
+
+if table_rows:
+
+    display_table = pd.DataFrame(
+        table_rows
+    )
+
+    display_table = display_table.rename(
+        columns={
+            "Option": "Option",
+            "Facility": "Facility",
+            "Type": "Type",
+            "Facility Time": "Facility Time (min)",
+            "Facility Delay": "Facility Delay (min)",
+            "Route": "Route",
+            "Route Time": "Route Time (min)",
+            "Route Delay": "Route Delay (min)",
+            "Length": "Length (m)",
+            "Affected": "Affected Segments",
+            "Closed": "Closed Segments"
+        }
+    )
+
+    # Numeric formatting
+    for col in [
+        "Facility Time (min)",
+        "Facility Delay (min)",
+        "Route Time (min)",
+        "Route Delay (min)",
+        "Length (m)"
+    ]:
+
+        display_table[col] = (
+            display_table[col]
+            .apply(
+                lambda x:
+                    "—"
+                    if pd.isna(x)
+                    else f"{x:,.2f}"
+            )
+        )
+
+    for col in [
+        "Affected Segments",
+        "Closed Segments"
+    ]:
+
+        display_table[col] = (
+            display_table[col]
+            .apply(
+                lambda x:
+                    "—"
+                    if pd.isna(x)
+                    else f"{x:,.0f}"
+            )
+        )
+
+    st.dataframe(
+        display_table,
+        use_container_width=True,
+        hide_index=True,
+        height=390
+    )
+
+
+# ============================================================
+# MODEL NOTE
+# ============================================================
+
+st.markdown(
+    f"""
+    <div class="info-box">
+
+    <b>Model note:</b>
+    URIP is displaying frozen model outputs from
+    <b>{METADATA.get(
+        "model_version",
+        "URIP"
+    )}</b>.
+    No flood, traffic, routing, population or facility
+    calculations are performed by the dashboard.
+
+    The emergency population catchment is
+    <b>{METADATA.get(
+        "catchment_distance_m",
+        1000
+    )} m network distance</b>
+    using the normal network as the reference catchment.
+
+    The emergency V/C threshold is a
+    <b>URIP modelling assumption</b>,
+    not an official Nairobi operational standard.
+
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.markdown(
+    """
+    <div class="footer">
+        URIP — Urban Resilience Intelligence Platform
+        · Nairobi CBD Emergency Response Simulation
+        · Frozen analytical model / interactive decision-support interface
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+```
         - Rerouting is a fast network approximation rather than
           a full origin-destination traffic assignment.
         """
