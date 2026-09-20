@@ -1,47 +1,24 @@
 
 
-# ============================================================
-# URIP — NAIROBI URBAN RESILIENCE INTELLIGENCE PLATFORM
-# Streamlit dashboard for the frozen URIP analytical model
-#
-# IMPORTANT:
-# This application VISUALIZES frozen analytical outputs.
-# It does NOT recalculate the URIP model.
-#
-# Expected files:
-#   app.py
-#   URIP_MODEL.pkl.gz
-#
-# Optional:
-#   URIP_MODEL.pkl
-# ============================================================
-
-from pathlib import Path
-import base64
-import io
-import pickle
 import gzip
-import html
-import warnings
+import pickle
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 import folium
-from folium import plugins
-from shapely.geometry import LineString
-import streamlit as st
+from folium import Element
 from streamlit_folium import st_folium
-
-warnings.filterwarnings("ignore")
+import streamlit as st
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
-    page_title="URIP — Urban Resilience Intelligence Platform",
+    page_title="URIP | Urban Resilience Intelligence Platform",
     page_icon="🌍",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -49,41 +26,24 @@ st.set_page_config(
 
 
 # ============================================================
-# DESIGN SYSTEM
+# CONSTANTS
 # ============================================================
 
-NAVY = "#0B2545"
-NAVY_2 = "#15335C"
-TEAL = "#0EA5A8"
-BLUE = "#2563EB"
-GREEN = "#16A34A"
-AMBER = "#F59E0B"
-ORANGE = "#F97316"
-RED = "#DC2626"
-DARK_RED = "#7F0000"
-PURPLE = "#7C3AED"
+BASE_DIR = Path(__file__).resolve().parent
 
-WHITE = "#FFFFFF"
-OFFWHITE = "#F8FAFC"
-LIGHT = "#F1F5F9"
-BORDER = "#E2E8F0"
-TEXT = "#0F172A"
-MUTED = "#64748B"
+MODEL_GZ = BASE_DIR / "URIP_MODEL.pkl.gz"
+MODEL_PKL = BASE_DIR / "URIP_MODEL.pkl"
 
-ROAD_COLORS = {
-    "Passable": "#2ca25f",
-    "Minor Disruption": "#fdae6b",
-    "Severe Disruption": "#e34a33",
-    "Closed": "#7f0000",
-    "No Data": "#969696",
-}
+ANALYSIS_CRS = "EPSG:32737"
+DISPLAY_CRS = "EPSG:4326"
 
-SCENARIO_COLORS = {
-    "Normal": GREEN,
-    "Moderate Rainfall": AMBER,
-    "Heavy Rainfall": ORANGE,
-    "Severe Rainfall": RED,
-}
+MAP_CENTER = [-1.2864, 36.8172]
+MAP_ZOOM = 13
+
+FLOOD_BOUNDS = [
+    [-1.3149999999999973, 36.79],
+    [-1.2600000000000051, 36.85],
+]
 
 SCENARIOS = [
     "Normal",
@@ -99,234 +59,22 @@ SCENARIO_RAINFALL = {
     "Severe Rainfall": 75,
 }
 
-ANALYSIS_CRS = "EPSG:32737"
-DISPLAY_CRS = "EPSG:4326"
+ROAD_COLORS = {
+    "Passable": "#2ca25f",
+    "Minor Disruption": "#fdae6b",
+    "Severe Disruption": "#e34a33",
+    "Closed": "#7f0000",
+    "No Data": "#969696",
+}
 
-MAP_CENTER = [-1.2864, 36.8172]
-MAP_ZOOM = 13
+FLOOD_CLASS_COLORS = {
+    "Low": "#2ca25f",
+    "Moderate": "#fdae6b",
+    "High": "#e34a33",
+    "Very High": "#7f0000",
+}
 
-
-# ============================================================
-# GLOBAL CSS
-# ============================================================
-
-st.markdown(
-    f"""
-    <style>
-
-    .stApp {{
-        background: {OFFWHITE};
-    }}
-
-    [data-testid="stSidebar"] {{
-        background: {NAVY};
-    }}
-
-    [data-testid="stSidebar"] * {{
-        color: white;
-    }}
-
-    .block-container {{
-        padding-top: 1.2rem;
-        padding-bottom: 2rem;
-        max-width: 1500px;
-    }}
-
-    .urip-header {{
-        background: linear-gradient(
-            135deg,
-            {NAVY},
-            {NAVY_2}
-        );
-        color: white;
-        padding: 24px 28px;
-        border-radius: 14px;
-        margin-bottom: 18px;
-    }}
-
-    .urip-title {{
-        font-size: 30px;
-        font-weight: 800;
-        margin: 0;
-        letter-spacing: -0.5px;
-    }}
-
-    .urip-subtitle {{
-        font-size: 14px;
-        margin-top: 7px;
-        color: #CBD5E1;
-    }}
-
-    .section-header {{
-        margin-top: 22px;
-        margin-bottom: 10px;
-    }}
-
-    .section-title {{
-        font-size: 21px;
-        font-weight: 750;
-        color: {TEXT};
-    }}
-
-    .section-subtitle {{
-        color: {MUTED};
-        font-size: 13px;
-        margin-top: 3px;
-    }}
-
-    .kpi-card {{
-        background: white;
-        border: 1px solid {BORDER};
-        border-radius: 12px;
-        padding: 14px 15px;
-        min-height: 105px;
-        box-shadow: 0 1px 3px rgba(15,23,42,0.04);
-    }}
-
-    .kpi-label {{
-        font-size: 11px;
-        color: {MUTED};
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        font-weight: 700;
-    }}
-
-    .kpi-value {{
-        font-size: 23px;
-        font-weight: 800;
-        color: {TEXT};
-        margin-top: 5px;
-    }}
-
-    .kpi-note {{
-        font-size: 11px;
-        color: {MUTED};
-        margin-top: 3px;
-    }}
-
-    .status-card {{
-        background: white;
-        border: 1px solid {BORDER};
-        border-radius: 12px;
-        padding: 15px;
-        min-height: 145px;
-    }}
-
-    .status-scenario {{
-        font-size: 12px;
-        font-weight: 700;
-        color: {MUTED};
-        text-transform: uppercase;
-        letter-spacing: 0.4px;
-    }}
-
-    .status-value {{
-        font-size: 20px;
-        font-weight: 800;
-        color: {TEXT};
-        margin-top: 6px;
-    }}
-
-    .facility-card {{
-        border-radius: 12px;
-        padding: 16px;
-        margin-top: 12px;
-        margin-bottom: 7px;
-        background: white;
-    }}
-
-    .route-card {{
-        margin-left: 20px;
-        border-radius: 8px;
-        padding: 12px 15px;
-        margin-bottom: 8px;
-        background: white;
-    }}
-
-    .badge {{
-        display: inline-block;
-        color: white;
-        padding: 4px 9px;
-        border-radius: 999px;
-        font-size: 10px;
-        font-weight: 800;
-        letter-spacing: 0.4px;
-    }}
-
-    .alert-card {{
-        padding: 14px 17px;
-        border-radius: 10px;
-        margin: 12px 0;
-        font-size: 14px;
-    }}
-
-    .model-note {{
-        background: #EFF6FF;
-        border: 1px solid #BFDBFE;
-        border-radius: 10px;
-        padding: 13px 16px;
-        color: #1E3A8A;
-        font-size: 12px;
-        margin-top: 20px;
-    }}
-
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
-# MODEL LOADING
-# ============================================================
-
-BASE_DIR = Path(__file__).resolve().parent
-
-MODEL_GZ = BASE_DIR / "URIP_MODEL.pkl.gz"
-MODEL_PKL = BASE_DIR / "URIP_MODEL.pkl"
-
-
-@st.cache_resource
-def load_model():
-
-    if MODEL_GZ.exists():
-
-        with gzip.open(MODEL_GZ, "rb") as f:
-            model = pickle.load(f)
-
-        return model, MODEL_GZ.name
-
-    if MODEL_PKL.exists():
-
-        with open(MODEL_PKL, "rb") as f:
-            model = pickle.load(f)
-
-        return model, MODEL_PKL.name
-
-    raise FileNotFoundError(
-        "No frozen URIP model was found. "
-        "Upload URIP_MODEL.pkl.gz to the repository."
-    )
-
-
-try:
-
-    MODEL, MODEL_FILENAME = load_model()
-
-except Exception as exc:
-
-    st.error("URIP model could not be loaded.")
-
-    st.code(str(exc))
-
-    st.stop()
-
-
-# ============================================================
-# MODEL VALIDATION
-# ============================================================
-
-REQUIRED_TOP_LEVEL = [
+EXPECTED_SECTIONS = [
     "metadata",
     "scenarios",
     "flood",
@@ -341,56 +89,70 @@ REQUIRED_TOP_LEVEL = [
     "summary",
 ]
 
+
+# ============================================================
+# MODEL LOADING
+# ============================================================
+
+@st.cache_resource(show_spinner=False)
+def load_model():
+    errors = []
+
+    if MODEL_GZ.exists():
+        try:
+            with gzip.open(MODEL_GZ, "rb") as f:
+                model = pickle.load(f)
+
+            return model, MODEL_GZ.name
+
+        except Exception as e:
+            errors.append(f"{MODEL_GZ.name}: {e}")
+
+    if MODEL_PKL.exists():
+        try:
+            with open(MODEL_PKL, "rb") as f:
+                model = pickle.load(f)
+
+            return model, MODEL_PKL.name
+
+        except Exception as e:
+            errors.append(f"{MODEL_PKL.name}: {e}")
+
+    raise FileNotFoundError(
+        "No usable URIP model package found.\n\n"
+        + "\n".join(errors)
+    )
+
+
+try:
+    MODEL, MODEL_FILE = load_model()
+except Exception as e:
+    st.error("Unable to load the frozen URIP model.")
+    st.exception(e)
+    st.stop()
+
+
 missing_sections = [
-    key
-    for key in REQUIRED_TOP_LEVEL
-    if key not in MODEL
+    section for section in EXPECTED_SECTIONS
+    if section not in MODEL
 ]
 
 if missing_sections:
-
     st.error(
-        "The frozen URIP model is incomplete."
+        "The uploaded model is incomplete.\n\n"
+        f"Missing sections: {', '.join(missing_sections)}"
     )
-
-    st.write(
-        "Missing sections:",
-        missing_sections
-    )
-
     st.stop()
 
 
 # ============================================================
-# AUTHORITATIVE FROZEN TABLES
+# GENERIC HELPERS
 # ============================================================
 
-EMERGENCY = MODEL["emergency"]
-
-INCIDENT_REPORT = EMERGENCY["incident_report"]
-INCIDENT_COMPARISON = EMERGENCY["incident_comparison"]
-SITUATION_REPORT = EMERGENCY["situation_report"]
-EMERGENCY_KPIS = EMERGENCY["kpis"]
-
-FACILITY_OPTIONS = MODEL["facility_options"]
-
-ROUTES_ALTERNATIVES = MODEL["routes"]["alternatives"]
-ROUTES_RECOMMENDED = MODEL["routes"]["recommended"]
-
-INCIDENT_POINTS = MODEL["incidents"]["points"]
-INCIDENT_FLOOD = MODEL["incidents"]["flood"]
-
-FACILITIES = MODEL["facilities"]
-TRAFFIC = MODEL["traffic"]
-
-
-# ============================================================
-# DATA ACCESS HELPERS
-# ============================================================
-
-def safe_float(value, default=0.0):
-
+def safe_float(value, default=np.nan):
     try:
+        if value is None:
+            return default
 
         if pd.isna(value):
             return default
@@ -398,145 +160,297 @@ def safe_float(value, default=0.0):
         return float(value)
 
     except Exception:
-
         return default
 
 
 def safe_int(value, default=0):
-
     try:
+        if value is None:
+            return default
 
         if pd.isna(value):
             return default
 
-        return int(value)
+        return int(round(float(value)))
 
     except Exception:
-
         return default
 
 
-def get_incident_ids():
+def fmt_number(value, decimals=0):
+    value = safe_float(value)
 
-    if (
-        INCIDENT_POINTS is not None
-        and not INCIDENT_POINTS.empty
-        and "incident_id" in INCIDENT_POINTS.columns
-    ):
+    if np.isnan(value):
+        return "—"
 
-        return sorted(
-            INCIDENT_POINTS["incident_id"]
-            .astype(str)
-            .unique()
-            .tolist()
-        )
-
-    if "incident_id" in INCIDENT_REPORT.columns:
-
-        return sorted(
-            INCIDENT_REPORT["incident_id"]
-            .astype(str)
-            .unique()
-            .tolist()
-        )
-
-    return []
+    return f"{value:,.{decimals}f}"
 
 
-def get_incident_report(
+def fmt_minutes(value):
+    value = safe_float(value)
+
+    if np.isnan(value):
+        return "—"
+
+    return f"{value:,.2f} min"
+
+
+def fmt_pct(value):
+    value = safe_float(value)
+
+    if np.isnan(value):
+        return "—"
+
+    return f"{value:,.1f}%"
+
+
+def get_df(obj):
+    """
+    Return a DataFrame / GeoDataFrame if obj is one,
+    otherwise return None.
+    """
+    if isinstance(obj, (pd.DataFrame, gpd.GeoDataFrame)):
+        return obj
+
+    return None
+
+
+def scenario_rows(df, scenario):
+    """
+    Return rows belonging to a scenario.
+    """
+    if df is None or len(df) == 0:
+        return df
+
+    if "scenario" not in df.columns:
+        return df.iloc[0:0].copy()
+
+    return df[df["scenario"].astype(str) == str(scenario)].copy()
+
+
+def first_value(df, columns, default=np.nan):
+    """
+    Return the first non-null value from a list of possible columns.
+    """
+    if df is None or len(df) == 0:
+        return default
+
+    for column in columns:
+        if column in df.columns:
+            values = df[column].dropna()
+
+            if len(values):
+                return values.iloc[0]
+
+    return default
+
+
+def sum_value(df, columns, default=np.nan):
+    """
+    Sum the first matching numeric column.
+    """
+    if df is None or len(df) == 0:
+        return default
+
+    for column in columns:
+        if column in df.columns:
+            values = pd.to_numeric(
+                df[column],
+                errors="coerce"
+            )
+
+            if values.notna().any():
+                return values.sum()
+
+    return default
+
+
+def recursive_dataframes(obj, prefix=""):
+    """
+    Recursively discover DataFrames and GeoDataFrames.
+    Used only for reading already-frozen outputs.
+    """
+    found = []
+
+    if isinstance(obj, (pd.DataFrame, gpd.GeoDataFrame)):
+        found.append((prefix, obj))
+        return found
+
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            found.extend(
+                recursive_dataframes(value, child_prefix)
+            )
+
+    return found
+
+
+def find_metric_in_model(
     scenario,
-    incident_id
+    preferred_columns,
+    preferred_sections=None,
+    aggregation="first",
 ):
+    """
+    Search frozen tables for a scenario-specific metric.
 
-    if INCIDENT_REPORT.empty:
-        return pd.DataFrame()
+    This is a read-only extraction helper. It does not create
+    or recalculate analytical outputs.
+    """
 
-    return INCIDENT_REPORT[
+    preferred_sections = preferred_sections or []
+
+    candidates = []
+
+    # First search explicitly preferred sections.
+    for section in preferred_sections:
+        if section not in MODEL:
+            continue
+
+        for path, df in recursive_dataframes(
+            MODEL[section],
+            section
+        ):
+            candidates.append((path, df))
+
+    # Then search remaining model sections.
+    for section, obj in MODEL.items():
+
+        if section in preferred_sections:
+            continue
+
+        for path, df in recursive_dataframes(
+            obj,
+            section
+        ):
+            candidates.append((path, df))
+
+    for path, df in candidates:
+
+        if "scenario" not in df.columns:
+            continue
+
+        sdf = scenario_rows(df, scenario)
+
+        if len(sdf) == 0:
+            continue
+
+        for column in preferred_columns:
+
+            if column not in sdf.columns:
+                continue
+
+            values = pd.to_numeric(
+                sdf[column],
+                errors="coerce"
+            )
+
+            values = values.dropna()
+
+            if len(values) == 0:
+                continue
+
+            if aggregation == "sum":
+                return values.sum()
+
+            if aggregation == "mean":
+                return values.mean()
+
+            if aggregation == "max":
+                return values.max()
+
+            return values.iloc[0]
+
+    return np.nan
+
+
+# ============================================================
+# AUTHORITATIVE EMERGENCY TABLES
+# ============================================================
+
+EMERGENCY = MODEL["emergency"]
+
+INCIDENT_REPORT = EMERGENCY["incident_report"].copy()
+INCIDENT_COMPARISON = EMERGENCY["incident_comparison"].copy()
+SITUATION_REPORT = EMERGENCY["situation_report"].copy()
+EMERGENCY_KPIS = EMERGENCY["kpis"].copy()
+
+FACILITY_OPTIONS = MODEL["facility_options"].copy()
+
+ROUTES_ALTERNATIVES = MODEL["routes"]["alternatives"].copy()
+ROUTES_RECOMMENDED = MODEL["routes"]["recommended"].copy()
+
+
+# ============================================================
+# SCENARIO ACCESSORS
+# ============================================================
+
+def get_emergency_kpi(scenario):
+
+    rows = scenario_rows(
+        EMERGENCY_KPIS,
+        scenario
+    )
+
+    if len(rows) == 0:
+        return pd.Series(dtype=object)
+
+    return rows.iloc[0]
+
+
+def get_situation(scenario):
+
+    rows = scenario_rows(
+        SITUATION_REPORT,
+        scenario
+    )
+
+    if len(rows) == 0:
+        return pd.Series(dtype=object)
+
+    return rows.iloc[0]
+
+
+def get_incident_report(scenario, incident_id):
+
+    rows = INCIDENT_REPORT[
         (INCIDENT_REPORT["scenario"] == scenario)
         &
         (INCIDENT_REPORT["incident_id"] == incident_id)
     ].copy()
 
+    if len(rows) == 0:
+        return pd.Series(dtype=object)
 
-def get_incident_comparison(
-    scenario,
-    incident_id
-):
-
-    if INCIDENT_COMPARISON.empty:
-        return pd.DataFrame()
-
-    return INCIDENT_COMPARISON[
-        (INCIDENT_COMPARISON["scenario"] == scenario)
-        &
-        (INCIDENT_COMPARISON["incident_id"] == incident_id)
-    ].copy()
-
-
-def get_situation_report(scenario):
-
-    if SITUATION_REPORT.empty:
-        return None
-
-    rows = SITUATION_REPORT[
-        SITUATION_REPORT["scenario"] == scenario
-    ]
-
-    if rows.empty:
-        return None
-
+    # incident_report is the authoritative one-row-per-
+    # incident/scenario recommendation table.
     return rows.iloc[0]
 
 
-def get_emergency_kpi(scenario):
+def get_facility_options(scenario, incident_id):
 
-    if EMERGENCY_KPIS.empty:
-        return None
-
-    rows = EMERGENCY_KPIS[
-        EMERGENCY_KPIS["scenario"] == scenario
-    ]
-
-    if rows.empty:
-        return None
-
-    return rows.iloc[0]
-
-
-def get_facility_options(
-    scenario,
-    incident_id
-):
-
-    if FACILITY_OPTIONS.empty:
-        return pd.DataFrame()
-
-    result = FACILITY_OPTIONS[
+    rows = FACILITY_OPTIONS[
         (FACILITY_OPTIONS["scenario"] == scenario)
         &
         (FACILITY_OPTIONS["incident_id"] == incident_id)
     ].copy()
 
-    if "facility_rank" in result.columns:
+    if len(rows) == 0:
+        return rows
 
-        result = result.sort_values(
-            "facility_rank"
-        )
-
-    return result
+    return rows.sort_values(
+        ["facility_rank"]
+    )
 
 
 def get_route_options(
     scenario,
     incident_id,
-    facility_rank=1,
-    route_rank=None
+    facility_rank
 ):
 
-    if ROUTES_ALTERNATIVES.empty:
-        return pd.DataFrame()
-
-    result = ROUTES_ALTERNATIVES[
+    rows = ROUTES_ALTERNATIVES[
         (ROUTES_ALTERNATIVES["scenario"] == scenario)
         &
         (ROUTES_ALTERNATIVES["incident_id"] == incident_id)
@@ -544,27 +458,24 @@ def get_route_options(
         (ROUTES_ALTERNATIVES["facility_rank"] == facility_rank)
     ].copy()
 
-    if route_rank is not None:
+    if len(rows) == 0:
+        return rows
 
-        result = result[
-            result["route_rank"] == route_rank
-        ].copy()
+    return rows.sort_values(
+        ["route_rank"]
+    )
 
-    if "route_rank" in result.columns:
 
-        result = result.sort_values(
-            "route_rank"
-        )
-
-    return result
-
+# ============================================================
+# SCENARIO DATA
+# ============================================================
 
 def get_roads(scenario):
 
-    if scenario not in TRAFFIC:
-        return gpd.GeoDataFrame()
+    roads = MODEL["traffic"].get(scenario)
 
-    roads = TRAFFIC[scenario]
+    if roads is None:
+        roads = MODEL["roads"].get(scenario)
 
     if roads is None:
         return gpd.GeoDataFrame()
@@ -574,10 +485,7 @@ def get_roads(scenario):
 
 def get_facilities(scenario):
 
-    if scenario not in FACILITIES:
-        return gpd.GeoDataFrame()
-
-    facilities = FACILITIES[scenario]
+    facilities = MODEL["facilities"].get(scenario)
 
     if facilities is None:
         return gpd.GeoDataFrame()
@@ -587,409 +495,273 @@ def get_facilities(scenario):
 
 def get_incidents():
 
-    if INCIDENT_POINTS is None:
-        return gpd.GeoDataFrame()
+    incidents = MODEL["incidents"]
 
-    return INCIDENT_POINTS.copy()
+    if isinstance(incidents, dict):
+
+        points = incidents.get("points")
+
+        if isinstance(
+            points,
+            (pd.DataFrame, gpd.GeoDataFrame)
+        ):
+            return points.copy()
+
+    return gpd.GeoDataFrame()
 
 
-# ============================================================
-# CBD POPULATION EXTRACTION
-#
-# Uses frozen population objects only.
-# No population recalculation is performed.
-# ============================================================
+def get_incident_flood(scenario):
 
-def _population_from_dataframe(df, scenario):
+    incidents = MODEL["incidents"]
 
-    if not isinstance(df, pd.DataFrame):
-        return None
+    if isinstance(incidents, dict):
 
-    if "scenario" not in df.columns:
-        return None
+        flood = incidents.get("flood")
 
-    rows = df[
-        df["scenario"] == scenario
-    ]
+        if isinstance(
+            flood,
+            (pd.DataFrame, gpd.GeoDataFrame)
+        ):
 
-    if rows.empty:
-        return None
-
-    row = rows.iloc[0]
-
-    candidates = [
-        "flood_exposed_population",
-        "access_disrupted_population",
-        "priority_population",
-        "high_priority_population",
-    ]
-
-    result = {}
-
-    for col in candidates:
-
-        if col in row.index:
-            result[col] = safe_float(
-                row[col]
+            rows = scenario_rows(
+                flood,
+                scenario
             )
 
-    if result:
-        return result
+            return rows
+
+    return gpd.GeoDataFrame()
+
+
+def get_flood_array(scenario):
+
+    flood = MODEL["flood"]
+
+    if isinstance(flood, dict):
+
+        value = flood.get(scenario)
+
+        if isinstance(value, np.ndarray):
+            return value
+
+        if isinstance(value, dict):
+
+            for key in [
+                "flood_raster",
+                "flood",
+                "array",
+                "impact",
+                "flood_impact",
+            ]:
+
+                candidate = value.get(key)
+
+                if isinstance(
+                    candidate,
+                    np.ndarray
+                ):
+                    return candidate
 
     return None
 
 
-def get_cbd_population_metrics(scenario):
-
-    """
-    Read frozen CBD-wide population outputs.
-
-    Priority order:
-    1. explicitly named authoritative_population
-    2. population exposure/access/priority result tables
-    3. summary tables
-    """
-
-    population_section = MODEL.get(
-        "population",
-        {}
-    )
-
-    if not isinstance(
-        population_section,
-        dict
-    ):
-        population_section = {}
-
-    candidate_names = [
-        "authoritative_population",
-        "population_exposure_results",
-        "population_access_results",
-        "population_priority_results",
-        "population",
-        "pop_result",
-        "state_population",
-    ]
-
-    result = {}
-
-    for name in candidate_names:
-
-        obj = population_section.get(name)
-
-        if isinstance(obj, pd.DataFrame):
-
-            if "scenario" not in obj.columns:
-                continue
-
-            rows = obj[
-                obj["scenario"] == scenario
-            ]
-
-            if rows.empty:
-                continue
-
-            # Look for aggregate rows if available.
-            row = rows.iloc[0]
-
-            for key in [
-                "flood_exposed_population",
-                "access_disrupted_population",
-                "newly_unreachable_population",
-                "priority_population",
-                "high_priority_population",
-            ]:
-
-                if key in row.index:
-
-                    result[key] = safe_float(
-                        row[key]
-                    )
-
-    # If some metrics were not available from named tables,
-    # search the summary section.
-    summary = MODEL.get("summary")
-
-    if isinstance(summary, dict):
-
-        for obj in summary.values():
-
-            if not isinstance(
-                obj,
-                pd.DataFrame
-            ):
-                continue
-
-            if "scenario" not in obj.columns:
-                continue
-
-            rows = obj[
-                obj["scenario"] == scenario
-            ]
-
-            if rows.empty:
-                continue
-
-            row = rows.iloc[0]
-
-            for key in [
-                "flood_exposed_population",
-                "access_disrupted_population",
-                "newly_unreachable_population",
-                "priority_population",
-                "high_priority_population",
-            ]:
-
-                if (
-                    key not in result
-                    and key in row.index
-                ):
-
-                    result[key] = safe_float(
-                        row[key]
-                    )
-
-    # Safe defaults.
-    for key in [
-        "flood_exposed_population",
-        "access_disrupted_population",
-        "newly_unreachable_population",
-        "priority_population",
-        "high_priority_population",
-    ]:
-
-        result.setdefault(
-            key,
-            0.0
-        )
-
-    return result
-
-
 # ============================================================
-# TRAFFIC METRICS
+# DASHBOARD KPIs
 # ============================================================
 
-def get_traffic_metrics(scenario):
+def get_dashboard_kpis(scenario):
+
+    kpi = get_emergency_kpi(scenario)
+
+    situation = get_situation(scenario)
 
     roads = get_roads(scenario)
-
-    if roads.empty:
-        return {
-            "affected": 0,
-            "closed": 0,
-            "mean_vc": 0,
-        }
-
-    affected = 0
-    closed = 0
-
-    if "affected_pct" in roads.columns:
-
-        affected = int(
-            (
-                roads["affected_pct"]
-                .fillna(0)
-                > 0
-            ).sum()
-        )
-
-    elif "access_status" in roads.columns:
-
-        affected = int(
-            (
-                roads["access_status"]
-                .astype(str)
-                .isin([
-                    "Minor Disruption",
-                    "Severe Disruption",
-                    "Closed",
-                ])
-            ).sum()
-        )
-
-    if "passability" in roads.columns:
-
-        closed = int(
-            (
-                roads["passability"]
-                .fillna(1)
-                <= 0
-            ).sum()
-        )
-
-    elif "access_status" in roads.columns:
-
-        closed = int(
-            (
-                roads["access_status"]
-                .astype(str)
-                == "Closed"
-            ).sum()
-        )
-
-    if "final_vc_ratio" in roads.columns:
-
-        vc = pd.to_numeric(
-            roads["final_vc_ratio"],
-            errors="coerce"
-        )
-
-        mean_vc = safe_float(
-            vc.replace(
-                [np.inf, -np.inf],
-                np.nan
-            ).mean()
-        )
-
-    else:
-
-        mean_vc = 0.0
-
-    return {
-        "affected": affected,
-        "closed": closed,
-        "mean_vc": mean_vc,
-    }
-
-
-# ============================================================
-# FACILITY METRICS
-# ============================================================
-
-def get_facility_metrics(scenario):
-
     facilities = get_facilities(scenario)
 
-    if facilities.empty:
-        return {
-            "affected": 0,
-            "unreachable": 0,
-        }
+    # --------------------------------------------------------
+    # Flood impact
+    # --------------------------------------------------------
 
-    if "operationally_affected" in facilities.columns:
-
-        affected = int(
-            pd.to_numeric(
-                facilities[
-                    "operationally_affected"
-                ],
-                errors="coerce"
-            )
-            .fillna(0)
-            .astype(bool)
-            .sum()
-        )
-
-    else:
-
-        affected = 0
-
-    if "access_status" in facilities.columns:
-
-        unreachable = int(
-            (
-                facilities[
-                    "access_status"
-                ]
-                .astype(str)
-                .str.lower()
-                .isin([
-                    "unreachable",
-                    "no access",
-                ])
-            ).sum()
-        )
-
-    else:
-
-        unreachable = 0
-
-    return {
-        "affected": affected,
-        "unreachable": unreachable,
-    }
-
-
-# ============================================================
-# INCIDENT METRICS
-# ============================================================
-
-def get_incident_metrics(
-    scenario,
-    incident_id
-):
-
-    report = get_incident_report(
-        scenario,
-        incident_id
+    flood_impact = first_value(
+        pd.DataFrame([kpi]),
+        [
+            "mean_flood_impact",
+        ],
     )
 
-    if report.empty:
+    if np.isnan(safe_float(flood_impact)):
+        flood_impact = first_value(
+            pd.DataFrame([situation]),
+            [
+                "mean_incident_flood_impact",
+            ],
+        )
 
-        return {}
+    # --------------------------------------------------------
+    # Roads
+    # --------------------------------------------------------
 
-    row = report.iloc[0]
+    roads_affected = np.nan
+    roads_closed = np.nan
+    mean_vc = np.nan
+
+    if len(roads):
+
+        if "affected_pct" in roads.columns:
+            affected = pd.to_numeric(
+                roads["affected_pct"],
+                errors="coerce"
+            )
+
+            roads_affected = (
+                (affected > 0).sum()
+            )
+
+        elif "access_status" in roads.columns:
+            roads_affected = (
+                roads["access_status"]
+                .astype(str)
+                .str.lower()
+                .ne("passable")
+                .sum()
+            )
+
+        if "passability" in roads.columns:
+
+            roads_closed = (
+                pd.to_numeric(
+                    roads["passability"],
+                    errors="coerce"
+                )
+                .eq(0)
+                .sum()
+            )
+
+        if "final_vc_ratio" in roads.columns:
+
+            vc = pd.to_numeric(
+                roads["final_vc_ratio"],
+                errors="coerce"
+            )
+
+            mean_vc = vc.mean()
+
+    # --------------------------------------------------------
+    # Facilities affected
+    # --------------------------------------------------------
+
+    facilities_affected = np.nan
+
+    if len(facilities):
+
+        if "operationally_affected" in facilities.columns:
+
+            values = facilities[
+                "operationally_affected"
+            ]
+
+            if values.dtype == bool:
+                facilities_affected = int(values.sum())
+            else:
+                facilities_affected = int(
+                    pd.to_numeric(
+                        values,
+                        errors="coerce"
+                    )
+                    .fillna(0)
+                    .gt(0)
+                    .sum()
+                )
+
+    # --------------------------------------------------------
+    # CBD population metrics
+    #
+    # These are read from the frozen model rather than
+    # recalculated in Streamlit.
+    # --------------------------------------------------------
+
+    population_exposed = find_metric_in_model(
+        scenario,
+        [
+            "population_exposed",
+            "flood_exposed_population",
+            "exposed_population",
+        ],
+        preferred_sections=[
+            "summary",
+            "population",
+        ],
+        aggregation="first",
+    )
+
+    access_disrupted = find_metric_in_model(
+        scenario,
+        [
+            "access_disrupted_population",
+            "access_disrupted",
+            "population_access_disrupted",
+        ],
+        preferred_sections=[
+            "summary",
+            "population",
+        ],
+        aggregation="first",
+    )
+
+    priority_population = find_metric_in_model(
+        scenario,
+        [
+            "priority_population",
+        ],
+        preferred_sections=[
+            "summary",
+            "population",
+        ],
+        aggregation="first",
+    )
+
+    high_priority = find_metric_in_model(
+        scenario,
+        [
+            "high_priority_population",
+        ],
+        preferred_sections=[
+            "summary",
+            "population",
+        ],
+        aggregation="first",
+    )
+
+    # --------------------------------------------------------
+    # Emergency response
+    # --------------------------------------------------------
+
+    mean_response = first_value(
+        pd.DataFrame([kpi]),
+        [
+            "mean_response_time_min",
+        ],
+    )
+
+    if np.isnan(safe_float(mean_response)):
+        mean_response = first_value(
+            pd.DataFrame([situation]),
+            [
+                "mean_response_time_min",
+            ],
+        )
 
     return {
-        "flood_impact": safe_float(
-            row.get(
-                "incident_flood_impact"
-            )
-        ),
-        "flood_class": str(
-            row.get(
-                "incident_flood_class",
-                "Unknown"
-            )
-        ),
-        "population_in_catchment": safe_float(
-            row.get(
-                "population_in_catchment"
-            )
-        ),
-        "flood_exposed_population": safe_float(
-            row.get(
-                "flood_exposed_population"
-            )
-        ),
-        "access_disrupted_population": safe_float(
-            row.get(
-                "access_disrupted_population"
-            )
-        ),
-        "priority_population": safe_float(
-            row.get(
-                "priority_population"
-            )
-        ),
-        "high_priority_population": safe_float(
-            row.get(
-                "high_priority_population"
-            )
-        ),
-        "recommended_facility": str(
-            row.get(
-                "recommended_facility_name",
-                "Unavailable"
-            )
-        ),
-        "recommended_facility_id": str(
-            row.get(
-                "recommended_facility_id",
-                ""
-            )
-        ),
-        "recommended_route_time": safe_float(
-            row.get(
-                "recommended_route_response_time_min"
-            )
-        ),
-        "recommended_route_length": safe_float(
-            row.get(
-                "recommended_route_length_m"
-            )
-        ),
+        "flood_impact": flood_impact,
+        "roads_affected": roads_affected,
+        "roads_closed": roads_closed,
+        "mean_vc": mean_vc,
+        "facilities_affected": facilities_affected,
+        "population_exposed": population_exposed,
+        "access_disrupted": access_disrupted,
+        "priority_population": priority_population,
+        "high_priority": high_priority,
+        "mean_response": mean_response,
     }
 
 
@@ -997,147 +769,132 @@ def get_incident_metrics(
 # GEO HELPERS
 # ============================================================
 
-def ensure_display_crs(gdf):
+def prepare_gdf(gdf):
 
     if gdf is None:
         return gpd.GeoDataFrame()
 
     if len(gdf) == 0:
-        return gdf
+        return gdf.copy()
 
     result = gdf.copy()
 
-    if result.crs is None:
+    if not isinstance(
+        result,
+        gpd.GeoDataFrame
+    ):
+        if "geometry" in result.columns:
+            result = gpd.GeoDataFrame(
+                result,
+                geometry="geometry"
+            )
+        else:
+            return gpd.GeoDataFrame()
 
+    if result.crs is None:
         result = result.set_crs(
             ANALYSIS_CRS,
             allow_override=True
         )
 
-    if str(result.crs) != DISPLAY_CRS:
-
+    try:
         result = result.to_crs(
             DISPLAY_CRS
         )
+    except Exception:
+        pass
 
     return result
 
 
-def route_geometry_to_gdf(
-    route_row
-):
-
-    geometry = route_row.get(
-        "geometry"
-    )
-
-    if geometry is None:
-        return None
-
-    try:
-
-        if isinstance(
-            geometry,
-            gpd.GeoSeries
-        ):
-
-            geometry = geometry.iloc[0]
-
-        return gpd.GeoDataFrame(
-            [route_row],
-            geometry=[geometry],
-            crs=ANALYSIS_CRS
-        ).to_crs(
-            DISPLAY_CRS
-        )
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
-# FLOOD IMAGE
-# ============================================================
-
-def flood_overlay(
+def add_geojson(
     fmap,
-    scenario
+    gdf,
+    name,
+    style_function,
+    tooltip=None,
+    show=False,
 ):
 
-    flood_obj = MODEL.get(
-        "flood",
-        {}
-    )
-
-    if not isinstance(
-        flood_obj,
-        dict
-    ):
+    if gdf is None or len(gdf) == 0:
         return
 
-    flood_array = flood_obj.get(
-        scenario
-    )
+    gdf = prepare_gdf(gdf)
 
-    if flood_array is None:
+    if len(gdf) == 0:
+        return
+
+    folium.GeoJson(
+        gdf.to_json(),
+        name=name,
+        style_function=style_function,
+        tooltip=tooltip,
+        show=show,
+        smooth_factor=0.5,
+    ).add_to(fmap)
+
+
+# ============================================================
+# FLOOD MAP
+# ============================================================
+
+def add_flood_raster(fmap, scenario):
+
+    array = get_flood_array(scenario)
+
+    if array is None:
         return
 
     try:
 
-        array = np.asarray(
-            flood_array,
-            dtype=float
-        )
+        array = np.asarray(array)
 
         if array.ndim != 2:
             return
 
-        valid = np.isfinite(array)
+        finite = np.isfinite(array)
 
-        if not valid.any():
+        if not finite.any():
             return
 
-        vmin = float(
-            np.nanpercentile(
-                array[valid],
-                5
+        minimum = np.nanmin(array)
+        maximum = np.nanmax(array)
+
+        if maximum > minimum:
+
+            normalized = (
+                (array - minimum)
+                /
+                (maximum - minimum)
             )
-        )
 
-        vmax = float(
-            np.nanpercentile(
-                array[valid],
-                95
+        else:
+            normalized = np.zeros_like(
+                array,
+                dtype=float
             )
+
+        # Transparent RGBA flood overlay.
+        rgba = np.zeros(
+            (
+                normalized.shape[0],
+                normalized.shape[1],
+                4
+            ),
+            dtype=np.uint8
         )
 
-        if vmax <= vmin:
-            vmax = vmin + 1
+        rgba[:, :, 0] = 220
+        rgba[:, :, 1] = 40
+        rgba[:, :, 2] = 40
 
-        import matplotlib
-
-        cmap = matplotlib.colormaps.get_cmap(
-            "turbo"
-        )
-
-        normalized = np.clip(
-            (array - vmin)
-            / (vmax - vmin),
-            0,
-            1
-        )
-
-        rgba = (
-            cmap(normalized)
-            * 255
+        alpha = (
+            normalized * 190
         ).astype(np.uint8)
 
-        rgba[..., 3] = np.where(
-            valid,
-            155,
-            0
-        ).astype(np.uint8)
+        alpha[~finite] = 0
+
+        rgba[:, :, 3] = alpha
 
         from PIL import Image
 
@@ -1146,117 +903,112 @@ def flood_overlay(
             mode="RGBA"
         )
 
+        import io
         buffer = io.BytesIO()
-
         image.save(
             buffer,
             format="PNG"
         )
 
+        import base64
+
         encoded = base64.b64encode(
             buffer.getvalue()
-        ).decode()
-
-        bounds = [
-            [-1.3149999999999973, 36.79],
-            [-1.2600000000000051, 36.85],
-        ]
+        ).decode("utf-8")
 
         folium.raster_layers.ImageOverlay(
             image=(
                 "data:image/png;base64,"
                 + encoded
             ),
-            bounds=bounds,
-            opacity=0.48,
+            bounds=FLOOD_BOUNDS,
+            opacity=0.55,
+            name=f"{scenario} flood impact",
             interactive=True,
             cross_origin=False,
-            zindex=2,
-            name=f"Flood scenario — {scenario}",
+            zindex=1,
+            show=True,
         ).add_to(fmap)
 
     except Exception:
-
-        pass
+        return
 
 
 # ============================================================
 # ROAD MAP
 # ============================================================
 
-def add_road_layer(
-    fmap,
-    roads,
-    scenario
-):
+def add_roads_layer(fmap, roads):
 
-    if roads.empty:
+    if roads is None or len(roads) == 0:
         return
 
-    roads_display = ensure_display_crs(
-        roads
-    )
+    roads = prepare_gdf(roads)
 
-    for _, row in roads_display.iterrows():
+    if len(roads) == 0:
+        return
 
-        geometry = row.geometry
+    for status, color in ROAD_COLORS.items():
 
-        if geometry is None:
+        if "passability" in roads.columns:
+
+            if status == "Passable":
+                subset = roads[
+                    pd.to_numeric(
+                        roads["passability"],
+                        errors="coerce"
+                    ) >= 0.999
+                ]
+
+            elif status == "Closed":
+                subset = roads[
+                    pd.to_numeric(
+                        roads["passability"],
+                        errors="coerce"
+                    ) <= 0.001
+                ]
+
+            elif status == "Minor Disruption":
+
+                if "access_status" in roads.columns:
+                    subset = roads[
+                        roads["access_status"]
+                        .astype(str)
+                        .eq("Minor Disruption")
+                    ]
+                else:
+                    subset = roads.iloc[0:0]
+
+            elif status == "Severe Disruption":
+
+                if "access_status" in roads.columns:
+                    subset = roads[
+                        roads["access_status"]
+                        .astype(str)
+                        .eq("Severe Disruption")
+                    ]
+                else:
+                    subset = roads.iloc[0:0]
+
+            else:
+                subset = roads.iloc[0:0]
+
+        else:
+            subset = roads.iloc[0:0]
+
+        if len(subset) == 0:
             continue
 
-        status = str(
-            row.get(
-                "access_status",
-                "No Data"
-            )
-        )
-
-        color = ROAD_COLORS.get(
-            status,
-            ROAD_COLORS["No Data"]
-        )
-
-        weight = 2.5
-
-        if status == "Closed":
-            weight = 4
-
-        elif status == "Severe Disruption":
-            weight = 3.5
-
-        popup = folium.Popup(
-            f"""
-            <b>Road ID:</b>
-            {html.escape(str(row.get("road_id", "")))}<br>
-            <b>Status:</b>
-            {html.escape(status)}<br>
-            <b>Flood impact:</b>
-            {safe_float(row.get("mean_flood_impact")):.3f}<br>
-            <b>Passability:</b>
-            {safe_float(row.get("passability")):.2f}<br>
-            <b>Traffic V/C:</b>
-            {safe_float(row.get("final_vc_ratio")):.2f}<br>
-            <b>Flood-adjusted time:</b>
-            {safe_float(row.get("traffic_adjusted_time_min")):.2f} min
-            """,
-            max_width=320,
-        )
-
         folium.GeoJson(
-            geometry.__geo_interface__,
+            subset.to_json(),
+            name=f"Roads — {status}",
             style_function=lambda feature,
-            color=color,
-            weight=weight,
-            opacity=0.78: {
+            color=color: {
                 "color": color,
-                "weight": weight,
-                "opacity": opacity,
+                "weight": 2.5,
+                "opacity": 0.85,
             },
-            tooltip=folium.Tooltip(
-                f"{status}"
-            ),
-            popup=popup,
-            name="Road network",
+            show=(status != "Passable"),
         ).add_to(fmap)
 
 
@@ -1264,29 +1016,55 @@ def add_road_layer(
 # FACILITY MAP
 # ============================================================
 
-def add_facility_layer(
+def add_facilities_layer(
     fmap,
-    facilities
+    facilities,
+    recommended_facility_id=None,
 ):
 
-    if facilities.empty:
+    if facilities is None or len(facilities) == 0:
         return
 
-    facilities_display = ensure_display_crs(
-        facilities
-    )
+    facilities = prepare_gdf(facilities)
 
-    layer = folium.FeatureGroup(
-        name="Emergency facilities",
-        show=True,
-    )
+    if len(facilities) == 0:
+        return
 
-    for _, row in facilities_display.iterrows():
+    for _, row in facilities.iterrows():
 
-        point = row.geometry
+        geometry = row.geometry
 
-        if point is None:
+        if geometry is None:
             continue
+
+        try:
+            if geometry.geom_type == "Point":
+                lat = geometry.y
+                lon = geometry.x
+            else:
+                point = geometry.centroid
+                lat = point.y
+                lon = point.x
+
+        except Exception:
+            continue
+
+        facility_id = str(
+            row.get(
+                "facility_id",
+                ""
+            )
+        )
+
+        facility_name = str(
+            row.get(
+                "name",
+                row.get(
+                    "facility_name",
+                    "Facility"
+                )
+            )
+        )
 
         facility_type = str(
             row.get(
@@ -1295,94 +1073,92 @@ def add_facility_layer(
             )
         )
 
-        name = str(
-            row.get(
-                "name",
-                "Unknown"
-            )
-        )
-
-        status = str(
-            row.get(
-                "access_status",
-                "Unknown"
-            )
-        )
-
-        if status.lower() in [
-            "unreachable",
-            "no access",
-        ]:
-
-            color = RED
-
-        elif row.get(
+        operationally_affected = row.get(
             "operationally_affected",
             False
-        ):
+        )
 
-            color = ORANGE
+        is_recommended = (
+            recommended_facility_id is not None
+            and facility_id
+            == str(recommended_facility_id)
+        )
+
+        if is_recommended:
+
+            color = "#00ffff"
+            radius = 11
+            fill_opacity = 1.0
+
+        elif bool(operationally_affected):
+
+            color = "#e34a33"
+            radius = 6
+            fill_opacity = 0.85
 
         else:
 
-            color = BLUE
+            color = "#3388ff"
+            radius = 5
+            fill_opacity = 0.75
+
+        popup_html = f"""
+        <div style="font-family:Arial;min-width:220px;">
+            <h4 style="margin-bottom:6px;">
+                {facility_name}
+            </h4>
+
+            <b>Facility ID:</b> {facility_id}<br>
+            <b>Type:</b> {facility_type}<br>
+            <b>Status:</b>
+            {"Recommended" if is_recommended else
+             ("Operationally affected" if bool(operationally_affected)
+              else "Operational")}
+        </div>
+        """
 
         folium.CircleMarker(
-            location=[
-                point.y,
-                point.x
-            ],
-            radius=5,
+            location=[lat, lon],
+            radius=radius,
             color=color,
             fill=True,
             fill_color=color,
-            fill_opacity=0.85,
-            weight=1,
-            tooltip=(
-                f"{name} • {facility_type}"
-            ),
+            fill_opacity=fill_opacity,
+            weight=2,
             popup=folium.Popup(
-                f"""
-                <b>{html.escape(name)}</b><br>
-                Type: {html.escape(facility_type)}<br>
-                Status: {html.escape(status)}<br>
-                Response:
-                {safe_float(row.get("response_time")):.2f} min
-                """,
-                max_width=300,
+                popup_html,
+                max_width=320
             ),
-        ).add_to(layer)
-
-    layer.add_to(fmap)
+            tooltip=facility_name,
+        ).add_to(fmap)
 
 
 # ============================================================
 # INCIDENT MAP
 # ============================================================
 
-def add_incident_layer(
+def add_incidents_layer(
     fmap,
-    incident_points,
-    selected_incident
+    incidents,
+    selected_incident,
 ):
 
-    if incident_points.empty:
+    if incidents is None or len(incidents) == 0:
         return
 
-    incidents_display = ensure_display_crs(
-        incident_points
-    )
+    incidents = prepare_gdf(incidents)
 
-    layer = folium.FeatureGroup(
-        name="Incidents",
-        show=True,
-    )
+    for _, row in incidents.iterrows():
 
-    for _, row in incidents_display.iterrows():
+        geometry = row.geometry
 
-        point = row.geometry
+        if geometry is None:
+            continue
 
-        if point is None:
+        try:
+            lat = geometry.y
+            lon = geometry.x
+        except Exception:
             continue
 
         incident_id = str(
@@ -1394,227 +1170,511 @@ def add_incident_layer(
 
         selected = (
             incident_id
-            == selected_incident
+            == str(selected_incident)
         )
 
-        color = RED if selected else PURPLE
-        radius = 9 if selected else 6
+        color = (
+            "#ff0000"
+            if selected
+            else "#ffcc00"
+        )
+
+        radius = (
+            10
+            if selected
+            else 6
+        )
 
         folium.CircleMarker(
-            location=[
-                point.y,
-                point.x
-            ],
+            location=[lat, lon],
             radius=radius,
             color=color,
             fill=True,
             fill_color=color,
-            fill_opacity=0.9,
+            fill_opacity=0.95,
             weight=2,
             tooltip=incident_id,
-            popup=folium.Popup(
-                f"""
-                <b>Incident:</b>
-                {html.escape(incident_id)}
-                """,
-                max_width=250,
-            ),
-        ).add_to(layer)
-
-    layer.add_to(fmap)
+            popup=incident_id,
+        ).add_to(fmap)
 
 
 # ============================================================
-# ROUTE MAP
+# ROUTE DRAWING
 # ============================================================
 
-def add_selected_routes(
+def add_route(
     fmap,
-    scenario,
-    incident_id,
-    selected_facility_rank=1
+    route_row,
+    color="#00ffff",
+    weight=7,
+    name="Recommended emergency route",
+    show=True,
 ):
 
-    routes = get_route_options(
-        scenario,
-        incident_id,
-        selected_facility_rank
-    )
-
-    if routes.empty:
+    if route_row is None:
         return
 
-    layer = folium.FeatureGroup(
-        name="Route alternatives",
-        show=True,
+    if isinstance(
+        route_row,
+        pd.DataFrame
+    ):
+
+        if len(route_row) == 0:
+            return
+
+        route_row = route_row.iloc[0]
+
+    geometry = route_row.get(
+        "geometry",
+        None
     )
 
-    for _, route in routes.iterrows():
+    if geometry is None:
+        return
 
-        route_rank = safe_int(
-            route.get("route_rank")
+    try:
+
+        route_gdf = gpd.GeoDataFrame(
+            [route_row],
+            geometry="geometry",
+            crs=ANALYSIS_CRS,
         )
 
-        route_gdf = route_geometry_to_gdf(
-            route
-        )
-
-        if route_gdf is None:
-            continue
-
-        geometry = route_gdf.geometry.iloc[0]
-
-        if geometry is None:
-            continue
-
-        recommended = (
-            route_rank == 1
-            and selected_facility_rank == 1
-        )
-
-        color = GREEN if recommended else BLUE
-        weight = 6 if recommended else 3
-
-        popup = folium.Popup(
-            f"""
-            <b>Route {route_rank}</b><br>
-            Response:
-            {safe_float(route.get("response_time_min")):.2f} min<br>
-            Length:
-            {safe_float(route.get("route_length_m")):,.0f} m<br>
-            Affected segments:
-            {safe_int(route.get("affected_segments"))}<br>
-            Closed segments:
-            {safe_int(route.get("closed_segments"))}<br>
-            Delay:
-            +{safe_float(route.get("response_delay_min")):.2f} min
-            """,
-            max_width=300,
+        route_gdf = prepare_gdf(
+            route_gdf
         )
 
         folium.GeoJson(
-            geometry.__geo_interface__,
-            style_function=lambda feature,
-            color=color,
-            weight=weight: {
+            route_gdf.to_json(),
+            name=name,
+            style_function=lambda feature: {
                 "color": color,
                 "weight": weight,
-                "opacity": 0.9,
+                "opacity": 0.95,
             },
-            tooltip=(
-                f"Route {route_rank}"
-                + (
-                    " — RECOMMENDED"
-                    if recommended
-                    else ""
-                )
+            show=show,
+            tooltip=folium.GeoJsonTooltip(
+                fields=[
+                    field
+                    for field in [
+                        "route_rank",
+                        "response_time_min",
+                        "route_length_m",
+                        "affected_segments",
+                        "closed_segments",
+                    ]
+                    if field in route_gdf.columns
+                ],
+                aliases=[
+                    alias
+                    for field, alias in [
+                        (
+                            "route_rank",
+                            "Route"
+                        ),
+                        (
+                            "response_time_min",
+                            "Response time (min)"
+                        ),
+                        (
+                            "route_length_m",
+                            "Length (m)"
+                        ),
+                        (
+                            "affected_segments",
+                            "Affected segments"
+                        ),
+                        (
+                            "closed_segments",
+                            "Closed segments"
+                        ),
+                    ]
+                    if field in route_gdf.columns
+                ],
+                localize=True,
             ),
-            popup=popup,
-        ).add_to(layer)
+        ).add_to(fmap)
 
-    layer.add_to(fmap)
+    except Exception:
+        return
 
 
 # ============================================================
-# MAP LEGEND
+# BUILD MAP
 # ============================================================
 
-def add_road_legend(fmap):
+def build_map(
+    scenario,
+    map_mode,
+    incident_id,
+):
 
-    legend_html = """
-    <div style="
-        position: fixed;
-        bottom: 25px;
-        left: 25px;
-        z-index: 9999;
-        background: white;
-        padding: 12px 14px;
-        border-radius: 9px;
-        border: 1px solid #CBD5E1;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-        font-size: 12px;
-    ">
-
-        <div style="
-            font-weight:700;
-            margin-bottom:8px;
-        ">
-            Road passability
-        </div>
-
-        <div>
-            <span style="
-                display:inline-block;
-                width:12px;
-                height:12px;
-                background:#2ca25f;
-                margin-right:6px;
-            "></span>
-            Passable
-        </div>
-
-        <div>
-            <span style="
-                display:inline-block;
-                width:12px;
-                height:12px;
-                background:#fdae6b;
-                margin-right:6px;
-            "></span>
-            Minor disruption
-        </div>
-
-        <div>
-            <span style="
-                display:inline-block;
-                width:12px;
-                height:12px;
-                background:#e34a33;
-                margin-right:6px;
-            "></span>
-            Severe disruption
-        </div>
-
-        <div>
-            <span style="
-                display:inline-block;
-                width:12px;
-                height:12px;
-                background:#7f0000;
-                margin-right:6px;
-            "></span>
-            Closed
-        </div>
-
-    </div>
-    """
-
-    fmap.get_root().html.add_child(
-        folium.Element(
-            legend_html
-        )
+    fmap = folium.Map(
+        location=MAP_CENTER,
+        zoom_start=MAP_ZOOM,
+        control_scale=True,
+        tiles=None,
     )
 
+    # Base maps
+    folium.TileLayer(
+        tiles="OpenStreetMap",
+        name="OpenStreetMap",
+        control=True,
+    ).add_to(fmap)
+
+    folium.TileLayer(
+        tiles=(
+            "https://server.arcgisonline.com/"
+            "ArcGIS/rest/services/"
+            "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        ),
+        attr="Esri World Imagery",
+        name="Satellite",
+        control=True,
+    ).add_to(fmap)
+
+    # --------------------------------------------------------
+    # Flood layer
+    # --------------------------------------------------------
+
+    add_flood_raster(
+        fmap,
+        scenario
+    )
+
+    # Flood boundary
+    folium.Rectangle(
+        bounds=FLOOD_BOUNDS,
+        color="#555555",
+        weight=1,
+        fill=False,
+        name="URIP analysis boundary",
+    ).add_to(fmap)
+
+    # --------------------------------------------------------
+    # Roads
+    # --------------------------------------------------------
+
+    roads = get_roads(scenario)
+
+    if map_mode in [
+        "Flood Scenario",
+        "Emergency Response",
+    ]:
+
+        add_roads_layer(
+            fmap,
+            roads
+        )
+
+    # --------------------------------------------------------
+    # Emergency information
+    # --------------------------------------------------------
+
+    facilities = get_facilities(
+        scenario
+    )
+
+    incidents = get_incidents()
+
+    report = get_incident_report(
+        scenario,
+        incident_id
+    )
+
+    recommended_facility_id = None
+
+    if len(report):
+
+        recommended_facility_id = report.get(
+            "recommended_facility_id",
+            None
+        )
+
+    # --------------------------------------------------------
+    # Facilities
+    # --------------------------------------------------------
+
+    add_facilities_layer(
+        fmap,
+        facilities,
+        recommended_facility_id
+    )
+
+    # --------------------------------------------------------
+    # Incidents
+    # --------------------------------------------------------
+
+    add_incidents_layer(
+        fmap,
+        incidents,
+        incident_id
+    )
+
+    # --------------------------------------------------------
+    # Selected incident flood point
+    # --------------------------------------------------------
+
+    incident_flood = get_incident_flood(
+        scenario
+    )
+
+    if len(incident_flood):
+
+        selected_flood = incident_flood[
+            incident_flood["incident_id"]
+            == incident_id
+        ].copy()
+
+        selected_flood = prepare_gdf(
+            selected_flood
+        )
+
+        for _, row in selected_flood.iterrows():
+
+            geometry = row.geometry
+
+            if geometry is None:
+                continue
+
+            try:
+
+                lat = geometry.y
+                lon = geometry.x
+
+                impact = safe_float(
+                    row.get(
+                        "flood_impact",
+                        np.nan
+                    )
+                )
+
+                flood_class = str(
+                    row.get(
+                        "flood_class",
+                        "Unknown"
+                    )
+                )
+
+                color = FLOOD_CLASS_COLORS.get(
+                    flood_class,
+                    "#555555"
+                )
+
+                folium.CircleMarker(
+                    location=[lat, lon],
+                    radius=13,
+                    color=color,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=0.25,
+                    weight=3,
+                    tooltip=(
+                        f"{incident_id} — "
+                        f"{flood_class}"
+                    ),
+                    popup=(
+                        f"<b>{incident_id}</b><br>"
+                        f"Flood impact: "
+                        f"{fmt_number(impact, 3)}<br>"
+                        f"Class: {flood_class}"
+                    ),
+                ).add_to(fmap)
+
+            except Exception:
+                pass
+
+    # --------------------------------------------------------
+    # Emergency route
+    # --------------------------------------------------------
+
+    if map_mode == "Emergency Response":
+
+        if len(report):
+
+            facility_rank = safe_int(
+                report.get(
+                    "facility_rank",
+                    1
+                ),
+                1
+            )
+
+            route_rank = safe_int(
+                report.get(
+                    "route_rank",
+                    1
+                ),
+                1
+            )
+
+            route_rows = ROUTES_ALTERNATIVES[
+                (ROUTES_ALTERNATIVES["scenario"] == scenario)
+                &
+                (ROUTES_ALTERNATIVES["incident_id"] == incident_id)
+                &
+                (
+                    ROUTES_ALTERNATIVES["facility_rank"]
+                    == facility_rank
+                )
+                &
+                (
+                    ROUTES_ALTERNATIVES["route_rank"]
+                    == route_rank
+                )
+            ]
+
+            if len(route_rows):
+
+                add_route(
+                    fmap,
+                    route_rows.iloc[0],
+                    color="#00ffff",
+                    weight=8,
+                    name=(
+                        "Recommended emergency route"
+                    ),
+                    show=True,
+                )
+
+    folium.LayerControl(
+        collapsed=False
+    ).add_to(fmap)
+
+    return fmap
+
 
 # ============================================================
-# DASHBOARD HEADER
+# UI STYLES
 # ============================================================
 
 st.markdown(
     """
-    <div class="urip-header">
+    <style>
 
-        <div class="urip-title">
-            URIP — Urban Resilience Intelligence Platform
-        </div>
+    .main-title {
+        font-size: 2.3rem;
+        font-weight: 800;
+        margin-bottom: 0;
+        letter-spacing: -0.03em;
+    }
 
-        <div class="urip-subtitle">
-            Nairobi urban flood, traffic and emergency-response intelligence
-        </div>
+    .subtitle {
+        color: #64748b;
+        font-size: 1rem;
+        margin-top: 0.2rem;
+        margin-bottom: 1.2rem;
+    }
 
+    .status-card {
+        padding: 1rem 1.2rem;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        background: #f8fafc;
+        margin-bottom: 1rem;
+    }
+
+    .status-title {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #64748b;
+        font-weight: 700;
+    }
+
+    .status-value {
+        font-size: 1.15rem;
+        font-weight: 750;
+        margin-top: 0.2rem;
+    }
+
+    .section-title {
+        font-size: 1.25rem;
+        font-weight: 750;
+        margin-top: 1rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .incident-header {
+        padding: 0.8rem 1rem;
+        border-radius: 10px;
+        background: #0f172a;
+        color: white;
+        margin-bottom: 0.8rem;
+    }
+
+    .facility-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 0.9rem;
+        margin-bottom: 0.5rem;
+        background: white;
+    }
+
+    .facility-rank {
+        font-size: 0.75rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        color: #64748b;
+    }
+
+    .facility-name {
+        font-size: 1rem;
+        font-weight: 750;
+    }
+
+    .route-row {
+        border-left: 3px solid #cbd5e1;
+        padding: 0.5rem 0.8rem;
+        margin-left: 0.8rem;
+        margin-bottom: 0.35rem;
+        background: #f8fafc;
+        border-radius: 0 7px 7px 0;
+        font-size: 0.88rem;
+    }
+
+    .recommended-route {
+        border-left: 4px solid #06b6d4;
+        background: #ecfeff;
+    }
+
+    .model-note {
+        color: #64748b;
+        font-size: 0.8rem;
+        padding-top: 1rem;
+        border-top: 1px solid #e2e8f0;
+        margin-top: 1.5rem;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
+st.markdown(
+    '<div class="main-title">🌍 URIP</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="subtitle">
+        Urban Resilience Intelligence Platform —
+        Flood, traffic and emergency-response intelligence
+        for Nairobi CBD.
     </div>
     """,
     unsafe_allow_html=True,
+)
+
+st.success(
+    "Complete frozen URIP dashboard package detected."
 )
 
 
@@ -1622,619 +1682,311 @@ st.markdown(
 # SIDEBAR CONTROLS
 # ============================================================
 
-st.sidebar.markdown(
-    """
-    <div style="
-        font-size:24px;
-        font-weight:800;
-        margin-bottom:3px;
-    ">
-        URIP
-    </div>
+with st.sidebar:
 
-    <div style="
-        font-size:12px;
-        color:#CBD5E1;
-        margin-bottom:20px;
-    ">
-        Scenario intelligence
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+    st.header("Scenario Controls")
 
-
-selected_scenario = st.sidebar.selectbox(
-    "Rainfall scenario",
-    SCENARIOS,
-    index=0,
-)
-
-
-incident_ids = get_incident_ids()
-
-if not incident_ids:
-
-    st.error(
-        "No incident records are available in the frozen model."
+    scenario = st.selectbox(
+        "Rainfall scenario",
+        SCENARIOS,
+        index=0,
     )
 
-    st.stop()
+    rainfall = SCENARIO_RAINFALL[
+        scenario
+    ]
 
+    map_mode = st.radio(
+        "Map mode",
+        [
+            "Flood Scenario",
+            "Emergency Response",
+        ],
+        index=0,
+    )
 
-selected_incident = st.sidebar.selectbox(
-    "Incident",
-    incident_ids,
-    index=0,
-)
+    incident_ids = sorted(
+        INCIDENT_REPORT[
+            INCIDENT_REPORT["scenario"] == scenario
+        ]["incident_id"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
 
+    if len(incident_ids) == 0:
 
-map_mode = st.sidebar.radio(
-    "Map mode",
-    [
-        "Flood Scenario",
-        "Emergency Response",
-    ],
-)
-
-
-# ============================================================
-# SELECTED SCENARIO DATA
-# ============================================================
-
-situation = get_situation_report(
-    selected_scenario
-)
-
-emergency_kpi = get_emergency_kpi(
-    selected_scenario
-)
-
-incident_metrics = get_incident_metrics(
-    selected_scenario,
-    selected_incident
-)
-
-traffic_metrics = get_traffic_metrics(
-    selected_scenario
-)
-
-facility_metrics = get_facility_metrics(
-    selected_scenario
-)
-
-population_metrics = get_cbd_population_metrics(
-    selected_scenario
-)
-
-
-# ============================================================
-# KPI VALUES
-# ============================================================
-
-if situation is not None:
-
-    mean_flood = safe_float(
-        situation.get(
-            "mean_incident_flood_impact"
+        incident_ids = sorted(
+            INCIDENT_REPORT[
+                "incident_id"
+            ]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
         )
+
+    incident_id = st.selectbox(
+        "Emergency incident",
+        incident_ids,
+        index=0,
     )
 
-    mean_response = safe_float(
-        situation.get(
-            "mean_response_time_min"
-        )
+    st.divider()
+
+    st.caption(
+        f"Rainfall intensity: {rainfall} mm/hr"
     )
 
-else:
-
-    mean_flood = 0
-    mean_response = 0
-
-
-roads_affected = traffic_metrics[
-    "affected"
-]
-
-roads_closed = traffic_metrics[
-    "closed"
-]
-
-mean_vc = traffic_metrics[
-    "mean_vc"
-]
-
-facilities_affected = facility_metrics[
-    "affected"
-]
-
-population_exposed = population_metrics[
-    "flood_exposed_population"
-]
-
-population_access = population_metrics[
-    "access_disrupted_population"
-]
-
-population_priority = population_metrics[
-    "priority_population"
-]
-
-population_high_priority = population_metrics[
-    "high_priority_population"
-]
+    st.caption(
+        f"Model file: {MODEL_FILE}"
+    )
 
 
 # ============================================================
-# SCENARIO SUMMARY
+# GET CURRENT DATA
+# ============================================================
+
+kpis = get_dashboard_kpis(
+    scenario
+)
+
+kpi_row = get_emergency_kpi(
+    scenario
+)
+
+situation = get_situation(
+    scenario
+)
+
+incident_report = get_incident_report(
+    scenario,
+    incident_id
+)
+
+facility_options = get_facility_options(
+    scenario,
+    incident_id
+)
+
+
+# ============================================================
+# KPI STRIP
 # ============================================================
 
 st.markdown(
-    """
-    <div class="section-header">
-
-        <div class="section-title">
-            Scenario intelligence
-        </div>
-
-        <div class="section-subtitle">
-            Frozen analytical outputs for the selected rainfall scenario
-        </div>
-
-    </div>
-    """,
+    '<div class="section-title">Scenario Intelligence</div>',
     unsafe_allow_html=True,
 )
 
+kpi_cols = st.columns(5)
 
-kpi_data = [
-    (
-        "Flood impact",
-        f"{mean_flood:.3f}",
-        selected_scenario,
-    ),
-    (
-        "Roads affected",
-        f"{roads_affected:,}",
-        "road segments",
-    ),
-    (
-        "Roads closed",
-        f"{roads_closed:,}",
-        "road segments",
-    ),
-    (
+with kpi_cols[0]:
+    st.metric(
+        "Flood Impact",
+        fmt_number(
+            kpis["flood_impact"],
+            3
+        ),
+    )
+
+with kpi_cols[1]:
+    st.metric(
+        "Roads Affected",
+        fmt_number(
+            kpis["roads_affected"]
+        ),
+    )
+
+with kpi_cols[2]:
+    st.metric(
+        "Roads Closed",
+        fmt_number(
+            kpis["roads_closed"]
+        ),
+    )
+
+with kpi_cols[3]:
+    st.metric(
         "Mean V/C",
-        f"{mean_vc:.2f}",
-        "network ratio",
-    ),
-    (
-        "Facilities affected",
-        f"{facilities_affected:,}",
-        "operationally affected",
-    ),
-    (
-        "Population exposed",
-        f"{population_exposed:,.0f}",
-        "CBD-wide",
-    ),
-    (
-        "Access disrupted",
-        f"{population_access:,.0f}",
-        "CBD-wide",
-    ),
-    (
-        "Priority population",
-        f"{population_priority:,.0f}",
-        "CBD-wide",
-    ),
-    (
-        "High priority",
-        f"{population_high_priority:,.0f}",
-        "CBD-wide",
-    ),
-    (
-        "Mean response",
-        f"{mean_response:.2f} min",
-        "all incidents",
-    ),
-]
+        fmt_number(
+            kpis["mean_vc"],
+            3
+        ),
+    )
+
+with kpi_cols[4]:
+    st.metric(
+        "Facilities Affected",
+        fmt_number(
+            kpis["facilities_affected"]
+        ),
+    )
 
 
-columns = st.columns(
-    5
-)
+kpi_cols2 = st.columns(5)
 
-for index, (
-    label,
-    value,
-    note,
-) in enumerate(kpi_data):
+with kpi_cols2[0]:
+    st.metric(
+        "Population Exposed",
+        fmt_number(
+            kpis["population_exposed"]
+        ),
+    )
 
-    column = columns[
-        index % 5
-    ]
+with kpi_cols2[1]:
+    st.metric(
+        "Access Disrupted",
+        fmt_number(
+            kpis["access_disrupted"]
+        ),
+    )
 
-    with column:
+with kpi_cols2[2]:
+    st.metric(
+        "Priority Population",
+        fmt_number(
+            kpis["priority_population"]
+        ),
+    )
 
-        st.markdown(
-            f"""
-            <div class="kpi-card">
+with kpi_cols2[3]:
+    st.metric(
+        "High Priority",
+        fmt_number(
+            kpis["high_priority"]
+        ),
+    )
 
-                <div class="kpi-label">
-                    {label}
-                </div>
-
-                <div class="kpi-value">
-                    {value}
-                </div>
-
-                <div class="kpi-note">
-                    {note}
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    if index % 5 == 4 and index != len(kpi_data) - 1:
-
-        st.write("")
+with kpi_cols2[4]:
+    st.metric(
+        "Mean Response Time",
+        fmt_minutes(
+            kpis["mean_response"]
+        ),
+    )
 
 
 # ============================================================
 # EMERGENCY STATUS
 # ============================================================
 
-status_text = "Operational"
-response_network = "Routes available"
-facility_status = "Facility recommendations stable"
-
-if situation is not None:
-
-    status_text = str(
-        situation.get(
-            "situation_status",
-            "Operational"
-        )
-    )
-
-    response_network = str(
-        situation.get(
-            "response_network_status",
-            "Routes available"
-        )
-    )
-
-    facility_status = str(
-        situation.get(
-            "facility_status",
-            "Facility recommendations stable"
-        )
-    )
-
-
-if status_text == "Operational":
-
-    status_color = GREEN
-
-elif status_text == "Access Disrupted":
-
-    status_color = AMBER
-
-elif status_text in [
-    "Priority",
-    "Flood Exposed",
-]:
-
-    status_color = ORANGE
-
-else:
-
-    status_color = RED
-
-
 st.markdown(
-    """
-    <div class="section-header">
-
-        <div class="section-title">
-            Emergency situation
-        </div>
-
-        <div class="section-subtitle">
-            Network-level emergency response condition
-        </div>
-
-    </div>
-    """,
+    '<div class="section-title">Emergency Situation</div>',
     unsafe_allow_html=True,
 )
 
+status_cols = st.columns(4)
 
-status_columns = st.columns(
-    3
-)
+with status_cols[0]:
 
-status_items = [
-    (
-        "Situation",
-        status_text,
-    ),
-    (
-        "Response network",
-        response_network,
-    ),
-    (
-        "Facility status",
-        facility_status,
-    ),
-]
-
-
-for column, (
-    label,
-    value,
-) in zip(
-    status_columns,
-    status_items,
-):
-
-    with column:
-
-        color = (
-            status_color
-            if label == "Situation"
-            else NAVY
-        )
-
-        st.markdown(
-            f"""
-            <div class="status-card">
-
-                <div class="status-scenario">
-                    {label}
-                </div>
-
-                <div class="status-value"
-                     style="color:{color};">
-                    {html.escape(value)}
-                </div>
-
-                <div style="
-                    margin-top:8px;
-                    color:{MUTED};
-                    font-size:12px;
-                ">
-                    Scenario:
-                    {html.escape(selected_scenario)}
-                </div>
-
+    st.markdown(
+        f"""
+        <div class="status-card">
+            <div class="status-title">
+                Situation status
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-# ============================================================
-# EMERGENCY ALERT
-# ============================================================
-
-if emergency_kpi is not None:
-
-    alert_text = str(
-        emergency_kpi.get(
-            "emergency_alert",
-            ""
-        )
+            <div class="status-value">
+                {situation.get("situation_status", "—")}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    if alert_text:
+with status_cols[1]:
 
-        if selected_scenario == "Normal":
+    st.markdown(
+        f"""
+        <div class="status-card">
+            <div class="status-title">
+                Response network
+            </div>
+            <div class="status-value">
+                {situation.get("response_network_status", "—")}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-            alert_bg = "#F0FDF4"
-            alert_border = "#86EFAC"
-            alert_color = "#166534"
+with status_cols[2]:
 
-        elif status_text == "Access Disrupted":
+    st.markdown(
+        f"""
+        <div class="status-card">
+            <div class="status-title">
+                Facility status
+            </div>
+            <div class="status-value">
+                {situation.get("facility_status", "—")}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-            alert_bg = "#FFFBEB"
-            alert_border = "#FCD34D"
-            alert_color = "#92400E"
+with status_cols[3]:
 
+    st.markdown(
+        f"""
+        <div class="status-card">
+            <div class="status-title">
+                Route availability
+            </div>
+            <div class="status-value">
+                {fmt_pct(
+                    kpi_row.get(
+                        "route_availability_pct",
+                        np.nan
+                    )
+                )}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+if len(kpi_row):
+
+    alert = kpi_row.get(
+        "emergency_alert",
+        None
+    )
+
+    if (
+        alert is not None
+        and not pd.isna(alert)
+    ):
+        if scenario == "Normal":
+            st.info(str(alert))
         else:
-
-            alert_bg = "#FEF2F2"
-            alert_border = "#FCA5A5"
-            alert_color = "#991B1B"
-
-        st.markdown(
-            f"""
-            <div class="alert-card"
-                 style="
-                    background:{alert_bg};
-                    border:1px solid {alert_border};
-                    color:{alert_color};
-                 ">
-
-                <b>Emergency intelligence:</b>
-                {html.escape(alert_text)}
-
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            st.warning(str(alert))
 
 
 # ============================================================
-# MAP SECTION
+# MAIN MAP
 # ============================================================
 
 st.markdown(
-    """
-    <div class="section-header">
-
-        <div class="section-title">
-            Spatial intelligence
-        </div>
-
-        <div class="section-subtitle">
-            Flood scenario, road disruption, emergency facilities,
-            incidents and response routes
-        </div>
-
-    </div>
-    """,
+    '<div class="section-title">Spatial Intelligence</div>',
     unsafe_allow_html=True,
 )
 
-
-roads = get_roads(
-    selected_scenario
+fmap = build_map(
+    scenario,
+    map_mode,
+    incident_id,
 )
-
-facilities = get_facilities(
-    selected_scenario
-)
-
-incidents = get_incidents()
-
-
-m = folium.Map(
-    location=MAP_CENTER,
-    zoom_start=MAP_ZOOM,
-    control_scale=True,
-    tiles=None,
-)
-
-
-# ------------------------------------------------------------
-# Base maps
-# ------------------------------------------------------------
-
-folium.TileLayer(
-    tiles="OpenStreetMap",
-    name="Street map",
-    control=True,
-).add_to(m)
-
-
-folium.TileLayer(
-    tiles=(
-        "https://server.arcgisonline.com/"
-        "ArcGIS/rest/services/World_Imagery/"
-        "MapServer/tile/{z}/{y}/{x}"
-    ),
-    attr="Esri",
-    name="Satellite",
-    control=True,
-).add_to(m)
-
-
-# ------------------------------------------------------------
-# Flood layer
-# ------------------------------------------------------------
-
-if map_mode == "Flood Scenario":
-
-    flood_overlay(
-        m,
-        selected_scenario
-    )
-
-
-# ------------------------------------------------------------
-# Road layer
-# ------------------------------------------------------------
-
-add_road_layer(
-    m,
-    roads,
-    selected_scenario
-)
-
-
-# ------------------------------------------------------------
-# Facilities
-# ------------------------------------------------------------
-
-add_facility_layer(
-    m,
-    facilities
-)
-
-
-# ------------------------------------------------------------
-# Incidents
-# ------------------------------------------------------------
-
-add_incident_layer(
-    m,
-    incidents,
-    selected_incident
-)
-
-
-# ------------------------------------------------------------
-# Emergency routes
-# ------------------------------------------------------------
-
-if map_mode == "Emergency Response":
-
-    incident_row = get_incident_report(
-        selected_scenario,
-        selected_incident
-    )
-
-    if not incident_row.empty:
-
-        incident = incident_row.iloc[0]
-
-        facility_rank = safe_int(
-            incident.get(
-                "facility_rank",
-                1
-            ),
-            1
-        )
-
-        add_selected_routes(
-            m,
-            selected_scenario,
-            selected_incident,
-            facility_rank
-        )
-
-
-# ------------------------------------------------------------
-# Legend
-# ------------------------------------------------------------
-
-add_road_legend(
-    m
-)
-
-
-# ------------------------------------------------------------
-# Layer control
-# ------------------------------------------------------------
-
-folium.LayerControl(
-    collapsed=False
-).add_to(m)
-
-
-# ------------------------------------------------------------
-# Map display
-# ------------------------------------------------------------
 
 st_folium(
-    m,
+    fmap,
     width=None,
     height=650,
     returned_objects=[],
+    use_container_width=True,
 )
 
 
@@ -2243,143 +1995,173 @@ st_folium(
 # ============================================================
 
 st.markdown(
-    """
-    <div class="section-header">
-
-        <div class="section-title">
-            Incident intelligence
-        </div>
-
-        <div class="section-subtitle">
-            Facility selection and route alternatives for the selected incident
-        </div>
-
-    </div>
-    """,
+    '<div class="section-title">Incident Intelligence</div>',
     unsafe_allow_html=True,
 )
 
+if len(incident_report):
 
-incident_report = get_incident_report(
-    selected_scenario,
-    selected_incident
-)
+    incident_cols = st.columns(4)
 
-
-if incident_report.empty:
-
-    st.warning(
-        "No emergency intelligence is available for this incident."
-    )
-
-else:
-
-    incident = incident_report.iloc[0]
-
-    incident_columns = st.columns(
-        4
-    )
-
-    incident_summary = [
-        (
+    with incident_cols[0]:
+        st.metric(
             "Incident flood impact",
-            f"{safe_float(incident.get('incident_flood_impact')):.3f}",
-        ),
-        (
+            fmt_number(
+                incident_report.get(
+                    "incident_flood_impact",
+                    np.nan
+                ),
+                3,
+            ),
+        )
+
+    with incident_cols[1]:
+        st.metric(
             "Flood class",
             str(
-                incident.get(
+                incident_report.get(
                     "incident_flood_class",
-                    "Unknown"
+                    "—"
                 )
             ),
-        ),
-        (
+        )
+
+    with incident_cols[2]:
+        st.metric(
             "Catchment population",
-            f"{safe_float(incident.get('population_in_catchment')):,.0f}",
-        ),
-        (
+            fmt_number(
+                incident_report.get(
+                    "population_in_catchment",
+                    np.nan
+                )
+            ),
+        )
+
+    with incident_cols[3]:
+        st.metric(
             "Priority population",
-            f"{safe_float(incident.get('priority_population')):,.0f}",
-        ),
-    ]
+            fmt_number(
+                incident_report.get(
+                    "priority_population",
+                    np.nan
+                )
+            ),
+        )
 
-    for column, (
-        label,
-        value,
-    ) in zip(
-        incident_columns,
-        incident_summary,
-    ):
+    # --------------------------------------------------------
+    # Recommended facility
+    # --------------------------------------------------------
 
-        with column:
+    recommended_facility = incident_report.get(
+        "recommended_facility_name",
+        None
+    )
 
-            st.markdown(
-                f"""
-                <div class="kpi-card">
+    recommended_facility_id = incident_report.get(
+        "recommended_facility_id",
+        None
+    )
 
-                    <div class="kpi-label">
-                        {label}
-                    </div>
+    recommended_response = incident_report.get(
+        "recommended_facility_response_time_min",
+        np.nan
+    )
 
-                    <div class="kpi-value">
-                        {html.escape(value)}
-                    </div>
+    recommended_route_time = incident_report.get(
+        "recommended_route_response_time_min",
+        np.nan
+    )
 
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    st.markdown(
+        f"""
+        <div class="incident-header">
+            <b>{incident_id}</b>
+            &nbsp; • &nbsp;
+            {scenario}
+            &nbsp; • &nbsp;
+            Recommended facility:
+            <b>{recommended_facility or "—"}</b>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    rec_cols = st.columns(4)
+
+    with rec_cols[0]:
+        st.metric(
+            "Facility",
+            str(
+                recommended_facility
+                or "—"
+            ),
+        )
+
+    with rec_cols[1]:
+        st.metric(
+            "Facility response",
+            fmt_minutes(
+                recommended_response
+            ),
+        )
+
+    with rec_cols[2]:
+        st.metric(
+            "Route response",
+            fmt_minutes(
+                recommended_route_time
+            ),
+        )
+
+    with rec_cols[3]:
+        st.metric(
+            "Route length",
+            (
+                fmt_number(
+                    incident_report.get(
+                        "recommended_route_length_m",
+                        np.nan
+                    )
+                )
+                + " m"
+                if not np.isnan(
+                    safe_float(
+                        incident_report.get(
+                            "recommended_route_length_m",
+                            np.nan
+                        )
+                    )
+                )
+                else "—"
+            ),
+        )
 
 
 # ============================================================
-# FACILITY OPTIONS + ROUTE ALTERNATIVES
+# FACILITY OPTIONS + ROUTES
 # ============================================================
 
-facility_options = get_facility_options(
-    selected_scenario,
-    selected_incident
+st.markdown(
+    "### Facility options and route alternatives"
 )
 
-
-if facility_options.empty:
+if len(facility_options) == 0:
 
     st.info(
-        "No facility options are available for this incident."
+        "No frozen facility options are available "
+        "for this incident and scenario."
     )
 
 else:
-
-    recommended_facility_id = str(
-        incident.get(
-            "recommended_facility_id",
-            ""
-        )
-    )
-
-    recommended_facility_rank = safe_int(
-        incident.get(
-            "facility_rank",
-            1
-        ),
-        1
-    )
-
-    recommended_route_rank = safe_int(
-        incident.get(
-            "route_rank",
-            1
-        ),
-        1
-    )
 
     for _, facility in facility_options.iterrows():
 
         facility_rank = safe_int(
             facility.get(
                 "facility_rank",
-                0
-            )
+                np.nan
+            ),
+            0
         )
 
         facility_id = str(
@@ -2392,7 +2174,7 @@ else:
         facility_name = str(
             facility.get(
                 "facility_name",
-                "Unknown facility"
+                "Unnamed facility"
             )
         )
 
@@ -2403,555 +2185,283 @@ else:
             )
         )
 
-        response_time = safe_float(
+        travel_time = safe_float(
             facility.get(
-                "travel_time_min"
+                "travel_time_min",
+                np.nan
             )
         )
 
         normal_time = safe_float(
             facility.get(
-                "normal_travel_time_min"
+                "normal_travel_time_min",
+                np.nan
             )
         )
 
-        response_delay = safe_float(
+        delay = safe_float(
             facility.get(
-                "response_delay_min"
-            )
-        )
-
-        delay_pct = safe_float(
-            facility.get(
-                "response_delay_pct"
+                "response_delay_min",
+                np.nan
             )
         )
 
         reachable = bool(
             facility.get(
                 "reachable",
-                True
+                False
             )
         )
 
         is_recommended = (
-            facility_id
-            == recommended_facility_id
-        )
-
-        if is_recommended:
-
-            border_color = GREEN
-            background = "#F0FDF4"
-            badge_color = GREEN
-            badge_text = "RECOMMENDED"
-
-        else:
-
-            border_color = BORDER
-            background = WHITE
-            badge_color = MUTED
-            badge_text = (
-                f"OPTION {facility_rank}"
+            str(
+                recommended_facility_id
             )
-
-        reachable_color = (
-            GREEN
-            if reachable
-            else RED
+            == facility_id
         )
 
-        reachable_text = (
-            "Yes"
-            if reachable
-            else "No"
+        border_class = (
+            "recommended-route"
+            if is_recommended
+            else ""
         )
-
-        # ----------------------------------------------------
-        # Facility card
-        # ----------------------------------------------------
 
         st.markdown(
             f"""
-            <div class="facility-card"
-                 style="
-                    border:1px solid {border_color};
-                    background:{background};
-                 ">
-
-                <div style="
-                    display:flex;
-                    justify-content:space-between;
-                    align-items:center;
-                    margin-bottom:9px;
-                ">
-
-                    <span class="badge"
-                          style="
-                            background:{badge_color};
-                          ">
-                        {badge_text}
-                    </span>
-
-                    <span style="
-                        font-size:11px;
-                        color:{MUTED};
-                        font-weight:700;
-                    ">
-                        FACILITY RANK {facility_rank}
-                    </span>
-
+            <div class="facility-card">
+                <div class="facility-rank">
+                    Facility option {facility_rank}
+                    {" • RECOMMENDED" if is_recommended else ""}
                 </div>
 
-                <div style="
-                    font-size:18px;
-                    font-weight:800;
-                    color:{TEXT};
-                ">
-                    {html.escape(facility_name)}
+                <div class="facility-name">
+                    {facility_name}
                 </div>
 
-                <div style="
-                    color:{MUTED};
-                    font-size:13px;
-                    margin-top:3px;
-                ">
-                    {html.escape(facility_type)}
+                <div style="color:#64748b;">
+                    {facility_type}
                     &nbsp; • &nbsp;
-                    {html.escape(facility_id)}
+                    {facility_id}
                 </div>
 
-                <div style="
-                    display:flex;
-                    flex-wrap:wrap;
-                    gap:28px;
-                    margin-top:13px;
-                    padding-top:11px;
-                    border-top:1px solid {BORDER};
-                ">
-
-                    <div>
-                        <div class="kpi-label">
-                            RESPONSE
-                        </div>
-                        <div style="
-                            font-size:18px;
-                            font-weight:800;
-                            color:{TEXT};
-                        ">
-                            {response_time:.2f} min
-                        </div>
-                    </div>
-
-                    <div>
-                        <div class="kpi-label">
-                            NORMAL
-                        </div>
-                        <div style="
-                            font-size:18px;
-                            font-weight:800;
-                            color:{TEXT};
-                        ">
-                            {normal_time:.2f} min
-                        </div>
-                    </div>
-
-                    <div>
-                        <div class="kpi-label">
-                            DELAY
-                        </div>
-                        <div style="
-                            font-size:18px;
-                            font-weight:800;
-                            color:{RED};
-                        ">
-                            +{response_delay:.2f} min
-                        </div>
-                    </div>
-
-                    <div>
-                        <div class="kpi-label">
-                            REACHABLE
-                        </div>
-                        <div style="
-                            font-size:18px;
-                            font-weight:800;
-                            color:{reachable_color};
-                        ">
-                            {reachable_text}
-                        </div>
-                    </div>
-
+                <div style="margin-top:6px;">
+                    <b>Response:</b>
+                    {fmt_minutes(travel_time)}
+                    &nbsp; | &nbsp;
+                    <b>Normal:</b>
+                    {fmt_minutes(normal_time)}
+                    &nbsp; | &nbsp;
+                    <b>Delay:</b>
+                    {fmt_minutes(delay)}
+                    &nbsp; | &nbsp;
+                    <b>Reachable:</b>
+                    {"Yes" if reachable else "No"}
                 </div>
-
-                <div style="
-                    margin-top:9px;
-                    font-size:12px;
-                    color:{MUTED};
-                ">
-                    Relative response delay:
-                    <b>{delay_pct:,.1f}%</b>
-                </div>
-
             </div>
             """,
             unsafe_allow_html=True,
         )
 
         # ----------------------------------------------------
-        # Routes for facility
+        # Routes belonging to this facility
         # ----------------------------------------------------
 
-        routes = get_route_options(
-            selected_scenario,
-            selected_incident,
-            facility_rank
+        route_options = get_route_options(
+            scenario,
+            incident_id,
+            facility_rank,
         )
 
-        if routes.empty:
+        if len(route_options) == 0:
 
             st.markdown(
-                f"""
-                <div style="
-                    margin-left:20px;
-                    color:{MUTED};
-                    font-size:12px;
-                    padding:6px 0 10px 0;
-                ">
-                    No route alternatives are available
+                """
+                <div class="route-row">
+                    No frozen route alternative is available
                     for this facility.
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-            continue
+        else:
 
-        st.markdown(
-            """
-            <div style="
-                margin-left:20px;
-                margin-top:7px;
-                margin-bottom:8px;
-                font-size:13px;
-                font-weight:800;
-                color:#334155;
-            ">
-                Response route alternatives
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            for _, route in route_options.iterrows():
 
-        for _, route in routes.iterrows():
-
-            route_rank = safe_int(
-                route.get(
-                    "route_rank"
-                )
-            )
-
-            route_response = safe_float(
-                route.get(
-                    "response_time_min"
-                )
-            )
-
-            route_normal = safe_float(
-                route.get(
-                    "normal_travel_time_min"
-                )
-            )
-
-            route_delay = safe_float(
-                route.get(
-                    "response_delay_min"
-                )
-            )
-
-            route_delay_pct = safe_float(
-                route.get(
-                    "response_delay_pct"
-                )
-            )
-
-            route_length = safe_float(
-                route.get(
-                    "route_length_m"
-                )
-            )
-
-            affected_segments = safe_int(
-                route.get(
-                    "affected_segments"
-                )
-            )
-
-            closed_segments = safe_int(
-                route.get(
-                    "closed_segments"
-                )
-            )
-
-            route_recommended = (
-                is_recommended
-                and route_rank
-                == recommended_route_rank
-            )
-
-            if route_recommended:
-
-                route_border = GREEN
-                route_background = "#F7FEE7"
-                route_badge = GREEN
-                route_badge_text = "RECOMMENDED"
-
-            else:
-
-                route_border = BORDER
-                route_background = WHITE
-                route_badge = MUTED
-                route_badge_text = (
-                    f"ROUTE {route_rank}"
+                route_rank = safe_int(
+                    route.get(
+                        "route_rank",
+                        np.nan
+                    ),
+                    0
                 )
 
-            # ------------------------------------------------
-            # Route card
-            # ------------------------------------------------
+                response_time = safe_float(
+                    route.get(
+                        "response_time_min",
+                        np.nan
+                    )
+                )
 
-            st.markdown(
-                f"""
-                <div class="route-card"
-                     style="
-                        border:1px solid {route_border};
-                        border-left:4px solid {route_border};
-                        background:{route_background};
-                     ">
+                route_length = safe_float(
+                    route.get(
+                        "route_length_m",
+                        np.nan
+                    )
+                )
 
-                    <div style="
-                        display:flex;
-                        justify-content:space-between;
-                        align-items:center;
-                        margin-bottom:8px;
-                    ">
+                affected_segments = safe_int(
+                    route.get(
+                        "affected_segments",
+                        np.nan
+                    ),
+                    0
+                )
 
-                        <span class="badge"
-                              style="
-                                background:{route_badge};
-                              ">
-                            {route_badge_text}
-                        </span>
+                closed_segments = safe_int(
+                    route.get(
+                        "closed_segments",
+                        np.nan
+                    ),
+                    0
+                )
 
-                        <span style="
-                            font-size:11px;
-                            color:{MUTED};
-                        ">
-                            Route {route_rank}
-                        </span>
+                delay_pct = safe_float(
+                    route.get(
+                        "response_delay_pct",
+                        np.nan
+                    )
+                )
 
+                recommended = (
+                    is_recommended
+                    and route_rank
+                    ==
+                    safe_int(
+                        incident_report.get(
+                            "route_rank",
+                            1
+                        ),
+                        1
+                    )
+                )
+
+                route_class = (
+                    "route-row recommended-route"
+                    if recommended
+                    else "route-row"
+                )
+
+                st.markdown(
+                    f"""
+                    <div class="{route_class}">
+                        <b>Route {route_rank}</b>
+                        {" • RECOMMENDED" if recommended else ""}
+                        <br>
+
+                        Response:
+                        <b>
+                            {fmt_minutes(response_time)}
+                        </b>
+
+                        &nbsp; | &nbsp;
+
+                        Length:
+                        <b>
+                            {fmt_number(route_length)} m
+                        </b>
+
+                        &nbsp; | &nbsp;
+
+                        Affected:
+                        <b>
+                            {affected_segments}
+                        </b>
+
+                        &nbsp; | &nbsp;
+
+                        Closed:
+                        <b>
+                            {closed_segments}
+                        </b>
+
+                        &nbsp; | &nbsp;
+
+                        Delay:
+                        <b>
+                            {fmt_pct(delay_pct)}
+                        </b>
                     </div>
-
-                    <div style="
-                        display:flex;
-                        flex-wrap:wrap;
-                        gap:22px;
-                        font-size:13px;
-                        color:#334155;
-                    ">
-
-                        <div>
-                            <span style="color:{MUTED};">
-                                Response
-                            </span><br>
-                            <b>
-                                {route_response:.2f} min
-                            </b>
-                        </div>
-
-                        <div>
-                            <span style="color:{MUTED};">
-                                Length
-                            </span><br>
-                            <b>
-                                {route_length:,.0f} m
-                            </b>
-                        </div>
-
-                        <div>
-                            <span style="color:{MUTED};">
-                                Affected segments
-                            </span><br>
-                            <b>
-                                {affected_segments}
-                            </b>
-                        </div>
-
-                        <div>
-                            <span style="color:{MUTED};">
-                                Closed segments
-                            </span><br>
-                            <b>
-                                {closed_segments}
-                            </b>
-                        </div>
-
-                        <div>
-                            <span style="color:{MUTED};">
-                                Delay
-                            </span><br>
-                            <b style="color:{RED};">
-                                +{route_delay:.2f} min
-                            </b>
-                        </div>
-
-                    </div>
-
-                    <div style="
-                        margin-top:8px;
-                        padding-top:8px;
-                        border-top:1px solid {BORDER};
-                        color:{MUTED};
-                        font-size:11px;
-                    ">
-
-                        Normal route time:
-                        <b>{route_normal:.2f} min</b>
-
-                        &nbsp; • &nbsp;
-
-                        Relative delay:
-                        <b>{route_delay_pct:,.1f}%</b>
-
-                    </div>
-
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+                    """,
+                    unsafe_allow_html=True,
+                )
 
 
 # ============================================================
-# SCENARIO COMPARISON
+# SCENARIO SUMMARY
 # ============================================================
 
 st.markdown(
-    """
-    <div class="section-header">
-
-        <div class="section-title">
-            Scenario status
-        </div>
-
-        <div class="section-subtitle">
-            Comparison of emergency conditions across rainfall scenarios
-        </div>
-
-    </div>
-    """,
+    '<div class="section-title">Scenario status</div>',
     unsafe_allow_html=True,
 )
 
+summary_cols = st.columns(4)
 
-scenario_columns = st.columns(
-    4
-)
-
-
-for column, scenario_name in zip(
-    scenario_columns,
-    SCENARIOS,
+for index, current_scenario in enumerate(
+    SCENARIOS
 ):
 
-    row = get_situation_report(
-        scenario_name
+    row = get_emergency_kpi(
+        current_scenario
     )
 
-    if row is None:
-        continue
-
-    scenario_status = str(
-        row.get(
-            "situation_status",
-            "Unknown"
-        )
-    )
-
-    scenario_flood = safe_float(
-        row.get(
-            "mean_incident_flood_impact"
-        )
-    )
-
-    scenario_high = safe_int(
-        row.get(
-            "high_very_high_incidents"
-        )
-    )
-
-    scenario_response = safe_float(
-        row.get(
-            "mean_response_time_min"
-        )
-    )
-
-    scenario_color = SCENARIO_COLORS.get(
-        scenario_name,
-        NAVY
-    )
-
-    with column:
+    with summary_cols[index]:
 
         st.markdown(
             f"""
-            <div class="status-card"
-                 style="
-                    border-top:4px solid {scenario_color};
-                 ">
-
-                <div class="status-scenario">
-                    {html.escape(scenario_name)}
+            <div class="status-card">
+                <div class="status-title">
+                    {current_scenario}
                 </div>
 
                 <div class="status-value">
-                    {html.escape(scenario_status)}
+                    {row.get(
+                        "situation_status",
+                        "—"
+                    )}
                 </div>
 
-                <div style="
-                    margin-top:9px;
-                    color:{MUTED};
-                    font-size:12px;
-                    line-height:1.65;
-                ">
-
-                    Rainfall:
-                    <b>
-                        {SCENARIO_RAINFALL[scenario_name]}
-                        mm/hr
-                    </b>
-
+                <div style="margin-top:8px;color:#64748b;">
+                    Flood:
+                    {fmt_number(
+                        row.get(
+                            "mean_flood_impact",
+                            np.nan
+                        ),
+                        3
+                    )}
                     <br>
 
-                    Flood impact:
-                    <b>
-                        {scenario_flood:.3f}
-                    </b>
-
+                    Incidents:
+                    {safe_int(
+                        row.get(
+                            "high_very_high_incidents",
+                            np.nan
+                        ),
+                        0
+                    )}
+                    high / very high
                     <br>
 
-                    High / very high incidents:
-                    <b>
-                        {scenario_high}
-                    </b>
-
-                    <br>
-
-                    Mean response:
-                    <b>
-                        {scenario_response:.2f} min
-                    </b>
-
+                    Response:
+                    {fmt_minutes(
+                        row.get(
+                            "mean_response_time_min",
+                            np.nan
+                        )
+                    )}
                 </div>
-
             </div>
             """,
             unsafe_allow_html=True,
@@ -2959,61 +2469,25 @@ for column, scenario_name in zip(
 
 
 # ============================================================
-# MODEL INFORMATION
-# ============================================================
-
-st.markdown(
-    f"""
-    <div class="model-note">
-
-        <b>Frozen URIP analytical model</b><br>
-
-        Dashboard outputs are read directly from
-        <b>{html.escape(MODEL_FILENAME)}</b>.
-        The Streamlit interface does not recalculate flood,
-        traffic, population, facility or route analysis.
-
-        <br><br>
-
-        Analytical chain:
-
-        <b>
-        rainfall scenario →
-        flood impact →
-        road disruption →
-        passability →
-        flood-adjusted travel time →
-        traffic →
-        rerouting →
-        emergency response →
-        facilities →
-        population
-        </b>
-
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
-# FOOTER
+# MODEL NOTE
 # ============================================================
 
 st.markdown(
     """
-    <div style="
-        text-align:center;
-        color:#94A3B8;
-        font-size:11px;
-        margin-top:25px;
-        padding-top:12px;
-        border-top:1px solid #E2E8F0;
-    ">
-        URIP — Urban Resilience Intelligence Platform
-        • Nairobi CBD prototype
+    <div class="model-note">
+        <b>URIP frozen-model dashboard.</b>
+        All flood, road disruption, passability, traffic,
+        rerouting, facility, population and emergency-response
+        outputs shown here are read from the frozen analytical
+        package. The Streamlit interface does not recalculate
+        the analytical model.
+        <br><br>
+        Emergency routing represents modelled network routing.
+        Route alternatives shown are the frozen alternatives
+        generated by the URIP routing model. Affected route
+        segments indicate flood-affected segments and do not
+        necessarily mean that the segment is closed.
     </div>
     """,
     unsafe_allow_html=True,
-)
-        
+)   
