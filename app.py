@@ -2186,8 +2186,5 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-```
-        - Rerouting is a fast network approximation rather than
-          a full origin-destination traffic assignment.
-        """
-    )
+
+        
