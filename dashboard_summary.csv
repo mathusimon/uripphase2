@@ -1,0 +1,5 @@
+scenario,rainfall_mm_hr,mean_flood_impact,roads_affected,roads_substantially_affected,roads_severe,roads_closed,roads_passable,mean_vc,mean_open_road_delay,facilities_physically_affected,facilities_response_disrupted,facilities_no_access,facilities_operationally_affected,population_exposed,population_access_disrupted,population_newly_unreachable,population_priority,population_high_priority
+Normal,10.0,0.19702644205132025,0,0,0,0,6686,0.9627005927848922,,0,1,1,1,0.0,0.0,0.0,0.0,0.0
+Moderate Rainfall,30.0,0.2764820048480188,0,0,0,0,6686,1.2030613175165037,,0,174,1,174,0.0,80028.13237016089,0.0,0.0,0.0
+Heavy Rainfall,50.0,0.37500358933442157,718,353,86,0,6686,1.2713860227957967,,2,182,1,182,12509.249528951943,112752.13120071508,0.0,2749.8403923735023,376.0302242152393
+Severe Rainfall,75.0,0.5159124711810873,5394,5008,3741,426,6260,3.9655767653588474,,56,91,6,119,158747.36868248088,53581.83670744533,36396.203398107085,13244.223371622153,8643.361615465954
