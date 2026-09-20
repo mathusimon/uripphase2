@@ -23,7 +23,7 @@ st.set_page_config(
     page_title="URIP | Urban Resilience Intelligence Platform",
     page_icon="🌍",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ============================================================
@@ -868,92 +868,353 @@ def build_map(scenario, map_mode, incident_id):
 
 
 # ============================================================
-# UI STYLES
+# UI HELPERS — status pills, badges, small display helpers
+# ============================================================
+
+def pill(text, kind="neutral"):
+    """A small colored status badge. kind: good | warn | bad | info | neutral."""
+    return f'<span class="pill pill-{kind}">{text}</span>'
+
+
+def route_status(delay_pct, closed_segments, is_recommended):
+    if is_recommended:
+        return "Recommended", "info"
+    if safe_int(closed_segments, 0) > 0:
+        return "Closed", "bad"
+    delay_pct = safe_float(delay_pct)
+    if not np.isnan(delay_pct) and delay_pct > 100:
+        return "At Risk", "bad"
+    if not np.isnan(delay_pct) and delay_pct > 15:
+        return "Risky", "warn"
+    return "Available", "good"
+
+
+def facility_status(reachable, delay_min):
+    if not reachable:
+        return "Unreachable", "bad"
+    delay_min = safe_float(delay_min)
+    if not np.isnan(delay_min) and delay_min > 5:
+        return "At Risk", "warn"
+    return "Accessible", "good"
+
+
+def get_incident_coords(incident_id):
+    incidents = prepare_gdf(get_incidents())
+    if len(incidents) == 0 or "incident_id" not in incidents.columns:
+        return None, None
+
+    rows = incidents[incidents["incident_id"].astype(str) == str(incident_id)]
+    if len(rows) == 0:
+        return None, None
+
+    geometry = rows.iloc[0].geometry
+    if geometry is None:
+        return None, None
+
+    try:
+        return geometry.y, geometry.x
+    except Exception:
+        return None, None
+
+
+# ============================================================
+# THEME
 # ============================================================
 
 render_html(
     """
     <style>
-    .main-title {
-        font-size: 2.3rem;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    .stApp {
+        background: radial-gradient(circle at 15% 0%, #0f2036 0%, #0a1420 45%) fixed;
+    }
+
+    [data-testid="stSidebar"] {
+        background: #0c1728;
+        border-right: 1px solid #1c2c42;
+    }
+
+    [data-testid="stHeader"] {
+        background: transparent;
+    }
+
+    .block-container {
+        padding-top: 1.6rem;
+        padding-bottom: 2rem;
+        max-width: 1400px;
+    }
+
+    /* ---------- header ---------- */
+    .urip-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1rem 1.4rem;
+        border-radius: 14px;
+        background: linear-gradient(135deg, #0e2136 0%, #0b1a2c 100%);
+        border: 1px solid #1c2c42;
+        margin-bottom: 1.1rem;
+    }
+    .urip-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+    .urip-logo {
+        width: 42px;
+        height: 42px;
+        border-radius: 11px;
+        background: linear-gradient(135deg, #22c58b, #1a8dd8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.3rem;
+        flex-shrink: 0;
+    }
+    .urip-title {
+        font-size: 1.35rem;
         font-weight: 800;
-        margin-bottom: 0;
-        letter-spacing: -0.03em;
+        color: #f2f6fb;
+        letter-spacing: -0.02em;
+        line-height: 1.1;
     }
-    .subtitle {
-        color: #64748b;
-        font-size: 1rem;
-        margin-top: 0.2rem;
-        margin-bottom: 1.2rem;
+    .urip-subtitle {
+        font-size: 0.82rem;
+        color: #22c58b;
+        font-weight: 500;
+        margin-top: 0.1rem;
     }
-    .status-card {
-        padding: 1rem 1.2rem;
-        border-radius: 12px;
-        border: 1px solid #e2e8f0;
-        background: #f8fafc;
-        margin-bottom: 1rem;
+    .urip-meta {
+        text-align: right;
+        color: #9fb2c9;
+        font-size: 0.82rem;
+        line-height: 1.5;
     }
-    .status-title {
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #64748b;
+    .urip-meta b { color: #e7edf5; }
+    .urip-badge {
+        display: inline-block;
+        margin-top: 0.35rem;
+        padding: 0.28rem 0.7rem;
+        border-radius: 20px;
+        background: rgba(34, 197, 139, 0.12);
+        border: 1px solid rgba(34, 197, 139, 0.4);
+        color: #22c58b;
+        font-size: 0.72rem;
         font-weight: 700;
+        letter-spacing: 0.04em;
     }
-    .status-value {
-        font-size: 1.15rem;
-        font-weight: 750;
-        margin-top: 0.2rem;
+
+    /* ---------- generic panel ---------- */
+    .panel {
+        background: #101d30;
+        border: 1px solid #1c2c42;
+        border-radius: 14px;
+        padding: 1.1rem 1.2rem;
+        margin-bottom: 1.1rem;
     }
-    .section-title {
-        font-size: 1.25rem;
-        font-weight: 750;
-        margin-top: 1rem;
-        margin-bottom: 0.5rem;
-    }
-    .incident-header {
-        padding: 0.8rem 1rem;
-        border-radius: 10px;
-        background: #0f172a;
-        color: white;
-        margin-bottom: 0.8rem;
-    }
-    .facility-card {
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        padding: 0.9rem;
-        margin-bottom: 0.5rem;
-        background: white;
-    }
-    .facility-rank {
-        font-size: 0.75rem;
-        font-weight: 800;
+    .panel-title {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.07em;
         text-transform: uppercase;
-        color: #64748b;
+        color: #7e92ac;
+        margin-bottom: 0.85rem;
+    }
+    .panel-title span.count {
+        color: #4d6280;
+        font-weight: 500;
+        text-transform: none;
+        letter-spacing: 0;
+    }
+
+    /* ---------- KPI cards ---------- */
+    .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 0.8rem;
+        margin-bottom: 1.1rem;
+    }
+    @media (max-width: 1100px) {
+        .kpi-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    .kpi-card {
+        background: #101d30;
+        border: 1px solid #1c2c42;
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
+    }
+    .kpi-label {
+        font-size: 0.72rem;
+        color: #7e92ac;
+        font-weight: 500;
+        margin-bottom: 0.3rem;
+    }
+    .kpi-value {
+        font-size: 1.35rem;
+        font-weight: 800;
+        color: #f2f6fb;
+        letter-spacing: -0.01em;
+    }
+    .kpi-sub {
+        font-size: 0.72rem;
+        color: #4d6280;
+        margin-top: 0.15rem;
+    }
+
+    /* ---------- pills ---------- */
+    .pill {
+        display: inline-block;
+        padding: 0.2rem 0.6rem;
+        border-radius: 20px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+    .pill-good { background: rgba(34, 197, 139, 0.14); color: #22c58b; border: 1px solid rgba(34,197,139,0.35); }
+    .pill-warn { background: rgba(242, 169, 59, 0.14); color: #f2a93b; border: 1px solid rgba(242,169,59,0.35); }
+    .pill-bad  { background: rgba(229, 72, 77, 0.14);  color: #f0787c; border: 1px solid rgba(229,72,77,0.35); }
+    .pill-info { background: rgba(58, 160, 255, 0.14); color: #5eb3ff; border: 1px solid rgba(58,160,255,0.35); }
+    .pill-neutral { background: rgba(126, 146, 172, 0.14); color: #9fb2c9; border: 1px solid rgba(126,146,172,0.3); }
+
+    /* ---------- callouts ---------- */
+    .callout {
+        border-radius: 12px;
+        padding: 0.9rem 1.1rem;
+        margin-bottom: 1.1rem;
+        border: 1px solid;
+    }
+    .callout-title {
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        margin-bottom: 0.3rem;
+    }
+    .callout-body {
+        font-size: 0.88rem;
+        color: #cddaea;
+        line-height: 1.45;
+    }
+    .callout-info  { background: rgba(58, 160, 255, 0.08);  border-color: rgba(58, 160, 255, 0.3); }
+    .callout-info  .callout-title { color: #5eb3ff; }
+    .callout-good  { background: rgba(34, 197, 139, 0.08);  border-color: rgba(34, 197, 139, 0.3); }
+    .callout-good  .callout-title { color: #22c58b; }
+    .callout-warn  { background: rgba(242, 169, 59, 0.08);  border-color: rgba(242, 169, 59, 0.3); }
+    .callout-warn  .callout-title { color: #f2a93b; }
+
+    /* ---------- data table ---------- */
+    table.urip-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.84rem;
+    }
+    table.urip-table th {
+        text-align: left;
+        color: #7e92ac;
+        font-weight: 600;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        padding: 0.4rem 0.6rem;
+        border-bottom: 1px solid #1c2c42;
+    }
+    table.urip-table td {
+        padding: 0.5rem 0.6rem;
+        border-bottom: 1px solid #16233a;
+        color: #d7e1ee;
+    }
+    table.urip-table tr:last-child td { border-bottom: none; }
+    table.urip-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    table.urip-table tr.is-recommended td { background: rgba(34, 197, 139, 0.06); }
+
+    /* ---------- facility card ---------- */
+    .facility-block {
+        margin-bottom: 1rem;
+        padding-bottom: 0.9rem;
+        border-bottom: 1px solid #16233a;
+    }
+    .facility-block:last-child {
+        border-bottom: none;
+        margin-bottom: 0;
+        padding-bottom: 0;
+    }
+    .facility-name-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 0.2rem;
     }
     .facility-name {
-        font-size: 1rem;
-        font-weight: 750;
+        font-size: 0.95rem;
+        font-weight: 700;
+        color: #f2f6fb;
     }
-    .route-row {
-        border-left: 3px solid #cbd5e1;
-        padding: 0.5rem 0.8rem;
-        margin-left: 0.8rem;
-        margin-bottom: 0.35rem;
-        background: #f8fafc;
-        border-radius: 0 7px 7px 0;
-        font-size: 0.88rem;
+    .facility-sub {
+        font-size: 0.76rem;
+        color: #7e92ac;
+        margin-bottom: 0.55rem;
     }
-    .recommended-route {
-        border-left: 4px solid #06b6d4;
-        background: #ecfeff;
+
+    /* ---------- insight list ---------- */
+    .insight-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.6rem;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid #16233a;
+        font-size: 0.86rem;
+        color: #cddaea;
     }
-    .model-note {
-        color: #64748b;
+    .insight-row:last-child { border-bottom: none; }
+    .insight-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-top: 0.35rem;
+        flex-shrink: 0;
+    }
+    .dot-good { background: #22c58b; }
+    .dot-warn { background: #f2a93b; }
+    .dot-bad  { background: #e5484d; }
+    .dot-info { background: #3aa0ff; }
+
+    /* ---------- legend ---------- */
+    .legend-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
         font-size: 0.8rem;
+        color: #cddaea;
+        margin-bottom: 0.35rem;
+    }
+    .legend-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    /* ---------- misc ---------- */
+    .muted { color: #7e92ac; }
+    .model-note {
+        color: #55688a;
+        font-size: 0.78rem;
         padding-top: 1rem;
-        border-top: 1px solid #e2e8f0;
+        border-top: 1px solid #1c2c42;
         margin-top: 1.5rem;
+        line-height: 1.5;
+    }
+
+    /* tighten native widget look */
+    div[data-testid="stSelectbox"] label, div[data-testid="stRadio"] label {
+        color: #9fb2c9 !important;
+        font-size: 0.8rem !important;
+        font-weight: 600 !important;
     }
     </style>
     """
@@ -963,28 +1224,42 @@ render_html(
 # HEADER
 # ============================================================
 
-st.markdown('<div class="main-title">🌍 URIP</div>', unsafe_allow_html=True)
+now = pd.Timestamp.now()
+
 render_html(
-    """
-    <div class="subtitle">
-        Urban Resilience Intelligence Platform —
-        Flood, traffic and emergency-response intelligence for Nairobi CBD.
+    f"""
+    <div class="urip-header">
+        <div class="urip-brand">
+            <div class="urip-logo">🌍</div>
+            <div>
+                <div class="urip-title">URIP</div>
+                <div class="urip-subtitle">Urban Resilience Intelligence Platform</div>
+            </div>
+        </div>
+        <div class="urip-meta">
+            <div>📍 <b>Nairobi CBD</b> &nbsp; • &nbsp; {now.strftime("%-d %b %Y, %H:%M")}</div>
+            <div class="urip-badge">FROZEN MODEL · {MODEL_FILE}</div>
+        </div>
     </div>
     """
 )
-st.success("Complete frozen URIP dashboard package detected.")
 
 # ============================================================
-# SIDEBAR CONTROLS
+# CONTROL BAR
 # ============================================================
 
-with st.sidebar:
-    st.header("Scenario Controls")
+with st.container():
+    ctrl_cols = st.columns([1.3, 1.3, 1.6, 1.8])
 
-    scenario = st.selectbox("Rainfall scenario", SCENARIOS, index=0)
+    with ctrl_cols[0]:
+        scenario = st.selectbox("Rainfall scenario", SCENARIOS, index=0)
+
     rainfall = SCENARIO_RAINFALL[scenario]
 
-    map_mode = st.radio("Map mode", ["Flood Scenario", "Emergency Response"], index=0)
+    with ctrl_cols[1]:
+        map_mode = st.radio(
+            "Map mode", ["Flood Scenario", "Emergency Response"], index=0, horizontal=True
+        )
 
     incident_ids = sorted(
         INCIDENT_REPORT[INCIDENT_REPORT["scenario"] == scenario]["incident_id"]
@@ -995,11 +1270,21 @@ with st.sidebar:
             INCIDENT_REPORT["incident_id"].dropna().astype(str).unique().tolist()
         )
 
-    incident_id = st.selectbox("Emergency incident", incident_ids, index=0)
+    with ctrl_cols[2]:
+        incident_id = st.selectbox("Emergency incident", incident_ids, index=0)
 
-    st.divider()
-    st.caption(f"Rainfall intensity: {rainfall} mm/hr")
-    st.caption(f"Model file: {MODEL_FILE}")
+    with ctrl_cols[3]:
+        render_html(
+            f"""
+            <div style="padding-top: 1.7rem; font-size: 0.82rem;">
+                <span class="muted">Rainfall intensity</span>
+                <b style="color:#e7edf5;"> {rainfall} mm/hr</b>
+                &nbsp;·&nbsp;
+                <span class="muted">Map mode</span>
+                <b style="color:#e7edf5;"> {map_mode}</b>
+            </div>
+            """
+        )
 
 # ============================================================
 # GET CURRENT DATA
@@ -1015,114 +1300,229 @@ facility_options = get_facility_options(scenario, incident_id)
 # KPI STRIP
 # ============================================================
 
-st.markdown('<div class="section-title">Scenario Intelligence</div>', unsafe_allow_html=True)
-
-kpi_cols = st.columns(5)
-kpi_cols[0].metric("Flood Impact", fmt_number(kpis["flood_impact"], 3))
-kpi_cols[1].metric("Roads Affected", fmt_number(kpis["roads_affected"]))
-kpi_cols[2].metric("Roads Closed", fmt_number(kpis["roads_closed"]))
-kpi_cols[3].metric("Mean V/C", fmt_number(kpis["mean_vc"], 3))
-kpi_cols[4].metric("Facilities Affected", fmt_number(kpis["facilities_affected"]))
-
-kpi_cols2 = st.columns(5)
-kpi_cols2[0].metric("Population Exposed", fmt_number(kpis["population_exposed"]))
-kpi_cols2[1].metric("Access Disrupted", fmt_number(kpis["access_disrupted"]))
-kpi_cols2[2].metric("Priority Population", fmt_number(kpis["priority_population"]))
-kpi_cols2[3].metric("High Priority", fmt_number(kpis["high_priority"]))
-kpi_cols2[4].metric("Mean Response Time", fmt_minutes(kpis["mean_response"]))
-
-# ============================================================
-# EMERGENCY STATUS
-# ============================================================
-
-st.markdown('<div class="section-title">Emergency Situation</div>', unsafe_allow_html=True)
-
-status_cols = st.columns(4)
-status_fields = [
-    ("Situation status", situation.get("situation_status", "—")),
-    ("Response network", situation.get("response_network_status", "—")),
-    ("Facility status", situation.get("facility_status", "—")),
-    ("Route availability", fmt_pct(kpi_row.get("route_availability_pct", np.nan))),
+kpi_defs = [
+    ("Flood Impact", fmt_number(kpis["flood_impact"], 3), "mean index"),
+    ("Roads Affected", fmt_number(kpis["roads_affected"]), f"of {len(get_roads(scenario))} segments"),
+    ("Roads Closed", fmt_number(kpis["roads_closed"]), "fully impassable"),
+    ("Facilities Affected", fmt_number(kpis["facilities_affected"]), "operationally"),
+    ("Population Exposed", fmt_number(kpis["population_exposed"]), "residents"),
+    ("Mean Response Time", fmt_minutes(kpis["mean_response"]), "citywide"),
 ]
 
-for col, (title, value) in zip(status_cols, status_fields):
-    render_html(
-        f"""
-        <div class="status-card">
-            <div class="status-title">{title}</div>
-            <div class="status-value">{value}</div>
-        </div>
-        """,
-        target=col,
+kpi_html = '<div class="kpi-grid">'
+for label, value, sub in kpi_defs:
+    kpi_html += (
+        f'<div class="kpi-card">'
+        f'<div class="kpi-label">{label}</div>'
+        f'<div class="kpi-value">{value}</div>'
+        f'<div class="kpi-sub">{sub}</div>'
+        f"</div>"
     )
+kpi_html += "</div>"
+render_html(kpi_html)
 
-if len(kpi_row):
-    alert = kpi_row.get("emergency_alert", None)
+# ============================================================
+# SITUATION + INCIDENT SUMMARY ROW
+# ============================================================
+
+left_col, right_col = st.columns([1.35, 1])
+
+with left_col:
+    alert = kpi_row.get("emergency_alert", None) if len(kpi_row) else None
     if alert is not None and not pd.isna(alert):
-        (st.info if scenario == "Normal" else st.warning)(str(alert))
+        callout_kind = "callout-info" if scenario == "Normal" else "callout-warn"
+        render_html(
+            f"""
+            <div class="callout {callout_kind}">
+                <div class="callout-title">Current Situation</div>
+                <div class="callout-body">{alert}</div>
+            </div>
+            """
+        )
+
+    status_fields = [
+        ("Situation", situation.get("situation_status", "—")),
+        ("Response network", situation.get("response_network_status", "—")),
+        ("Facility status", situation.get("facility_status", "—")),
+        ("Route availability", fmt_pct(kpi_row.get("route_availability_pct", np.nan))),
+    ]
+
+    status_html = '<div class="panel"><div class="panel-title">Emergency Situation</div>'
+    status_html += '<div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">'
+    for title, value in status_fields:
+        status_html += (
+            f'<div class="kpi-card">'
+            f'<div class="kpi-label">{title}</div>'
+            f'<div class="kpi-value" style="font-size:1.05rem;">{value}</div>'
+            f"</div>"
+        )
+    status_html += "</div></div>"
+    render_html(status_html)
+
+    secondary_defs = [
+        ("Access Disrupted", fmt_number(kpis["access_disrupted"])),
+        ("Priority Population", fmt_number(kpis["priority_population"])),
+        ("High Priority", fmt_number(kpis["high_priority"])),
+        ("Mean V/C Ratio", fmt_number(kpis["mean_vc"], 3)),
+    ]
+    secondary_html = '<div class="panel"><div class="panel-title">Population &amp; Network Load</div>'
+    secondary_html += '<div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">'
+    for title, value in secondary_defs:
+        secondary_html += (
+            f'<div class="kpi-card">'
+            f'<div class="kpi-label">{title}</div>'
+            f'<div class="kpi-value" style="font-size:1.05rem;">{value}</div>'
+            f"</div>"
+        )
+    secondary_html += "</div></div>"
+    render_html(secondary_html)
+
+with right_col:
+    incident_lat, incident_lon = get_incident_coords(incident_id)
+    coord_text = (
+        f"{incident_lat:.4f}, {incident_lon:.4f}"
+        if incident_lat is not None and incident_lon is not None
+        else "—"
+    )
+
+    incident_html = (
+        '<div class="panel">'
+        '<div class="panel-title">Selected Incident</div>'
+        f'<div class="facility-name" style="margin-bottom:0.2rem;">{incident_id}</div>'
+        f'<div class="facility-sub">Nairobi CBD &nbsp;·&nbsp; {scenario}</div>'
+    )
+
+    if len(incident_report):
+        flood_class = str(incident_report.get("incident_flood_class", "—"))
+        flood_class_kind = {
+            "Low": "good", "Moderate": "warn", "High": "bad", "Very High": "bad",
+        }.get(flood_class, "neutral")
+
+        incident_html += (
+            '<div style="margin: 0.6rem 0;">'
+            f'{pill(flood_class + " flood risk", flood_class_kind)}'
+            "</div>"
+            '<div style="font-size:0.82rem; color:#9fb2c9; line-height:1.9;">'
+            f'Flood impact &nbsp;<b style="color:#e7edf5;">{fmt_number(incident_report.get("incident_flood_impact", np.nan), 3)}</b><br>'
+            f'Catchment population &nbsp;<b style="color:#e7edf5;">{fmt_number(incident_report.get("population_in_catchment", np.nan))}</b><br>'
+            f'Priority population &nbsp;<b style="color:#e7edf5;">{fmt_number(incident_report.get("priority_population", np.nan))}</b><br>'
+            f'Coordinates &nbsp;<b style="color:#e7edf5;">{coord_text}</b>'
+            "</div>"
+        )
+
+    incident_html += "</div>"
+    render_html(incident_html)
+
+    if len(incident_report):
+        recommended_facility = incident_report.get("recommended_facility_name", None)
+        recommended_facility_id = incident_report.get("recommended_facility_id", None)
+        recommended_response = incident_report.get("recommended_facility_response_time_min", np.nan)
+        recommended_route_time = incident_report.get("recommended_route_response_time_min", np.nan)
+        route_length = safe_float(incident_report.get("recommended_route_length_m", np.nan))
+        route_length_text = "—" if np.isnan(route_length) else fmt_number(route_length) + " m"
+
+        render_html(
+            f"""
+            <div class="callout callout-good">
+                <div class="callout-title">Recommended Route</div>
+                <div class="callout-body">
+                    Dispatch via <b style="color:#e7edf5;">{recommended_facility or "—"}</b>
+                    for minimal delay and flood exposure.
+                    <br><br>
+                    <span class="muted">Facility response</span>
+                    <b style="color:#e7edf5;"> {fmt_minutes(recommended_response)}</b>
+                    &nbsp;·&nbsp;
+                    <span class="muted">Route response</span>
+                    <b style="color:#e7edf5;"> {fmt_minutes(recommended_route_time)}</b>
+                    &nbsp;·&nbsp;
+                    <span class="muted">Route length</span>
+                    <b style="color:#e7edf5;"> {route_length_text}</b>
+                </div>
+            </div>
+            """
+        )
+    else:
+        recommended_facility_id = None
 
 # ============================================================
-# MAIN MAP
+# MAP + INSIGHTS
 # ============================================================
 
-st.markdown('<div class="section-title">Spatial Intelligence</div>', unsafe_allow_html=True)
+map_col, insight_col = st.columns([2.3, 1])
 
-fmap = build_map(scenario, map_mode, incident_id)
-st_folium(fmap, width=None, height=650, returned_objects=[], use_container_width=True)
+with map_col:
+    render_html('<div class="panel-title" style="margin-top:0.4rem;">Spatial Intelligence</div>')
+    fmap = build_map(scenario, map_mode, incident_id)
+    st_folium(fmap, width=None, height=640, returned_objects=[], use_container_width=True)
 
-# ============================================================
-# INCIDENT INTELLIGENCE
-# ============================================================
+with insight_col:
+    insights = []
 
-st.markdown('<div class="section-title">Incident Intelligence</div>', unsafe_allow_html=True)
+    roads_affected = safe_int(kpis["roads_affected"], -1)
+    if roads_affected >= 0:
+        total_roads = len(get_roads(scenario))
+        pct = (roads_affected / total_roads * 100) if total_roads else 0
+        insights.append((
+            f"{roads_affected} of {total_roads} road segments are affected ({pct:.0f}% of the network).",
+            "warn" if roads_affected else "good",
+        ))
 
-if len(incident_report):
-    incident_cols = st.columns(4)
-    incident_cols[0].metric(
-        "Incident flood impact", fmt_number(incident_report.get("incident_flood_impact", np.nan), 3)
-    )
-    incident_cols[1].metric("Flood class", str(incident_report.get("incident_flood_class", "—")))
-    incident_cols[2].metric(
-        "Catchment population", fmt_number(incident_report.get("population_in_catchment", np.nan))
-    )
-    incident_cols[3].metric(
-        "Priority population", fmt_number(incident_report.get("priority_population", np.nan))
-    )
+    roads_closed = safe_int(kpis["roads_closed"], -1)
+    if roads_closed > 0:
+        insights.append((f"{roads_closed} road segments are fully closed to traffic.", "bad"))
 
-    # Recommended facility
-    recommended_facility = incident_report.get("recommended_facility_name", None)
-    recommended_facility_id = incident_report.get("recommended_facility_id", None)
-    recommended_response = incident_report.get("recommended_facility_response_time_min", np.nan)
-    recommended_route_time = incident_report.get("recommended_route_response_time_min", np.nan)
+    facilities_affected = safe_int(kpis["facilities_affected"], -1)
+    if facilities_affected >= 0:
+        insights.append((
+            f"{facilities_affected} emergency facilities are operationally affected.",
+            "warn" if facilities_affected else "good",
+        ))
 
-    render_html(
-        f"""
-        <div class="incident-header">
-            <b>{incident_id}</b> &nbsp; • &nbsp; {scenario} &nbsp; • &nbsp;
-            Recommended facility: <b>{recommended_facility or "—"}</b>
-        </div>
-        """
-    )
+    pop_exposed = safe_int(kpis["population_exposed"], -1)
+    if pop_exposed > 0:
+        insights.append((f"{pop_exposed:,} people are in flood-exposed areas within the CBD.", "info"))
 
-    route_length = safe_float(incident_report.get("recommended_route_length_m", np.nan))
-    route_length_text = "—" if np.isnan(route_length) else fmt_number(route_length) + " m"
+    mean_response = safe_float(kpis["mean_response"])
+    if not np.isnan(mean_response):
+        insights.append((f"Mean citywide emergency response time is {fmt_minutes(mean_response)}.", "info"))
 
-    rec_cols = st.columns(4)
-    rec_cols[0].metric("Facility", str(recommended_facility or "—"))
-    rec_cols[1].metric("Facility response", fmt_minutes(recommended_response))
-    rec_cols[2].metric("Route response", fmt_minutes(recommended_route_time))
-    rec_cols[3].metric("Route length", route_length_text)
+    if not insights:
+        insights.append(("No frozen scenario insights are available for this selection.", "neutral"))
+
+    insight_html = '<div class="panel"><div class="panel-title">Key Insights</div>'
+    for text, kind in insights:
+        insight_html += (
+            f'<div class="insight-row"><div class="insight-dot dot-{kind}"></div><div>{text}</div></div>'
+        )
+    insight_html += "</div>"
+    render_html(insight_html)
+
+    legend_html = '<div class="panel"><div class="panel-title">Road Passability Legend</div>'
+    for status, color in ROAD_COLORS.items():
+        legend_html += (
+            f'<div class="legend-row"><div class="legend-dot" style="background:{color};"></div>{status}</div>'
+        )
+    legend_html += "</div>"
+    render_html(legend_html)
 
 # ============================================================
 # FACILITY OPTIONS + ROUTES
 # ============================================================
 
-st.markdown("### Facility options and route alternatives")
+render_html(
+    f'<div class="panel-title" style="margin-top:0.3rem;">'
+    f'Facility &amp; Route Comparison <span class="count">— {incident_id}, {scenario}</span></div>'
+)
 
 if len(facility_options) == 0:
-    st.info("No frozen facility options are available for this incident and scenario.")
-
+    render_html(
+        '<div class="panel"><span class="muted">'
+        "No frozen facility options are available for this incident and scenario."
+        "</span></div>"
+    )
 else:
+    blocks_html = '<div class="panel">'
+
     for _, facility in facility_options.iterrows():
         facility_rank = safe_int(facility.get("facility_rank", np.nan), 0)
         facility_id = str(facility.get("facility_id", ""))
@@ -1135,92 +1535,109 @@ else:
         reachable = bool(facility.get("reachable", False))
 
         is_recommended = str(recommended_facility_id) == facility_id
-        facility_badge = " • RECOMMENDED" if is_recommended else ""
+        f_label, f_kind = facility_status(reachable, delay)
+        if is_recommended:
+            f_label, f_kind = "Recommended", "info"
 
-        render_html(
-            f"""
-            <div class="facility-card">
-                <div class="facility-rank">Facility option {facility_rank}{facility_badge}</div>
-                <div class="facility-name">{facility_name}</div>
-                <div style="color:#64748b;">{facility_type} &nbsp; • &nbsp; {facility_id}</div>
-                <div style="margin-top:6px;">
-                    <b>Response:</b> {fmt_minutes(travel_time)}
-                    &nbsp; | &nbsp;
-                    <b>Normal:</b> {fmt_minutes(normal_time)}
-                    &nbsp; | &nbsp;
-                    <b>Delay:</b> {fmt_minutes(delay)}
-                    &nbsp; | &nbsp;
-                    <b>Reachable:</b> {"Yes" if reachable else "No"}
-                </div>
-            </div>
-            """
+        blocks_html += (
+            '<div class="facility-block">'
+            '<div class="facility-name-row">'
+            f'<div class="facility-name">#{facility_rank} &nbsp;{facility_name}</div>'
+            f'{pill(f_label, f_kind)}'
+            "</div>"
+            f'<div class="facility-sub">{facility_type} &nbsp;·&nbsp; {facility_id} '
+            f"&nbsp;·&nbsp; response {fmt_minutes(travel_time)} "
+            f"(normal {fmt_minutes(normal_time)}, delay {fmt_minutes(delay)})</div>"
         )
 
-        # Routes belonging to this facility
         route_options = get_route_options(scenario, incident_id, facility_rank)
 
         if len(route_options) == 0:
-            render_html(
-                '<div class="route-row">No frozen route alternative is available for this facility.</div>'
+            blocks_html += '<span class="muted">No frozen route alternative is available for this facility.</span>'
+        else:
+            blocks_html += (
+                '<table class="urip-table"><thead><tr>'
+                "<th>Route</th><th class=\"num\">Response</th><th class=\"num\">Length</th>"
+                "<th class=\"num\">Affected</th><th class=\"num\">Closed</th>"
+                "<th class=\"num\">Delay</th><th>Status</th>"
+                "</tr></thead><tbody>"
             )
-            continue
 
-        for _, route in route_options.iterrows():
-            route_rank = safe_int(route.get("route_rank", np.nan), 0)
-            response_time = safe_float(route.get("response_time_min", np.nan))
-            route_length = safe_float(route.get("route_length_m", np.nan))
-            affected_segments = safe_int(route.get("affected_segments", np.nan), 0)
-            closed_segments = safe_int(route.get("closed_segments", np.nan), 0)
-            delay_pct = safe_float(route.get("response_delay_pct", np.nan))
+            for _, route in route_options.iterrows():
+                route_rank = safe_int(route.get("route_rank", np.nan), 0)
+                response_time = safe_float(route.get("response_time_min", np.nan))
+                route_length = safe_float(route.get("route_length_m", np.nan))
+                affected_segments = safe_int(route.get("affected_segments", np.nan), 0)
+                closed_segments = safe_int(route.get("closed_segments", np.nan), 0)
+                delay_pct = safe_float(route.get("response_delay_pct", np.nan))
 
-            recommended = is_recommended and route_rank == safe_int(
-                incident_report.get("route_rank", 1), 1
-            )
-            route_class = "route-row recommended-route" if recommended else "route-row"
-            route_badge = " • RECOMMENDED" if recommended else ""
+                route_is_recommended = is_recommended and route_rank == safe_int(
+                    incident_report.get("route_rank", 1), 1
+                )
+                r_label, r_kind = route_status(delay_pct, closed_segments, route_is_recommended)
+                row_class = "is-recommended" if route_is_recommended else ""
 
-            render_html(
-                f"""
-                <div class="{route_class}">
-                    <b>Route {route_rank}</b>{route_badge}<br>
-                    Response: <b>{fmt_minutes(response_time)}</b>
-                    &nbsp; | &nbsp;
-                    Length: <b>{fmt_number(route_length)} m</b>
-                    &nbsp; | &nbsp;
-                    Affected: <b>{affected_segments}</b>
-                    &nbsp; | &nbsp;
-                    Closed: <b>{closed_segments}</b>
-                    &nbsp; | &nbsp;
-                    Delay: <b>{fmt_pct(delay_pct)}</b>
-                </div>
-                """
-            )
+                blocks_html += (
+                    f'<tr class="{row_class}">'
+                    f"<td>Route {route_rank}</td>"
+                    f'<td class="num">{fmt_minutes(response_time)}</td>'
+                    f'<td class="num">{fmt_number(route_length)} m</td>'
+                    f'<td class="num">{affected_segments}</td>'
+                    f'<td class="num">{closed_segments}</td>'
+                    f'<td class="num">{fmt_pct(delay_pct)}</td>'
+                    f"<td>{pill(r_label, r_kind)}</td>"
+                    "</tr>"
+                )
+
+            blocks_html += "</tbody></table>"
+
+        blocks_html += "</div>"
+
+    blocks_html += "</div>"
+    render_html(blocks_html)
 
 # ============================================================
-# SCENARIO SUMMARY
+# SCENARIO COMPARISON
 # ============================================================
 
-st.markdown('<div class="section-title">Scenario status</div>', unsafe_allow_html=True)
+render_html('<div class="panel-title" style="margin-top:0.3rem;">Scenario Comparison</div>')
 
-summary_cols = st.columns(4)
+scenario_rows_html = [
+    ("Situation", "situation_status", "text"),
+    ("Mean flood impact", "mean_flood_impact", "num3"),
+    ("High / very high incidents", "high_very_high_incidents", "int"),
+    ("Mean response time", "mean_response_time_min", "min"),
+    ("Route availability", "route_availability_pct", "pct"),
+]
 
-for col, current_scenario in zip(summary_cols, SCENARIOS):
-    row = get_emergency_kpi(current_scenario)
+table_html = (
+    '<div class="panel"><table class="urip-table"><thead><tr><th>Metric</th>'
+)
+for s in SCENARIOS:
+    table_html += f"<th>{s}</th>"
+table_html += "</tr></thead><tbody>"
 
-    render_html(
-        f"""
-        <div class="status-card">
-            <div class="status-title">{current_scenario}</div>
-            <div class="status-value">{row.get("situation_status", "—")}</div>
-            <div style="margin-top:8px;color:#64748b;">
-                Flood: {fmt_number(row.get("mean_flood_impact", np.nan), 3)}<br>
-                Incidents: {safe_int(row.get("high_very_high_incidents", np.nan), 0)} high / very high<br>
-                Response: {fmt_minutes(row.get("mean_response_time_min", np.nan))}
-            </div>
-        </div>
-        """,
-        target=col,
-    )
+for label, field, kind in scenario_rows_html:
+    table_html += f"<tr><td>{label}</td>"
+    for s in SCENARIOS:
+        row = get_emergency_kpi(s)
+        raw = row.get(field, np.nan) if len(row) else np.nan
+
+        if kind == "text":
+            cell = str(raw) if raw is not None and not pd.isna(raw) else "—"
+            table_html += f"<td>{cell}</td>"
+        elif kind == "num3":
+            table_html += f'<td class="num">{fmt_number(raw, 3)}</td>'
+        elif kind == "int":
+            table_html += f'<td class="num">{safe_int(raw, 0)}</td>'
+        elif kind == "min":
+            table_html += f'<td class="num">{fmt_minutes(raw)}</td>'
+        elif kind == "pct":
+            table_html += f'<td class="num">{fmt_pct(raw)}</td>'
+    table_html += "</tr>"
+
+table_html += "</tbody></table></div>"
+render_html(table_html)
 
 # ============================================================
 # MODEL NOTE
