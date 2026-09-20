@@ -1,5 +1,5 @@
 
-```python
+
 # ============================================================
 # URIP — URBAN RESILIENCE INTELLIGENCE PLATFORM
 # Nairobi CBD Emergency Response Simulation
