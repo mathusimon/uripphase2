@@ -2138,263 +2138,515 @@ if len(incident_report):
 
 
 # ============================================================
-# FACILITY OPTIONS + ROUTES
+# FACILITY OPTIONS + ROUTE ALTERNATIVES
 # ============================================================
 
 st.markdown(
-    "### Facility options and route alternatives"
+    """
+    <div class="section-header">
+        <div class="section-title">Facility options and route alternatives</div>
+        <div class="section-subtitle">
+            Ranked emergency facilities and available response routes for the selected incident
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-if len(facility_options) == 0:
+# ------------------------------------------------------------
+# Selected incident report
+# ------------------------------------------------------------
 
-    st.info(
-        "No frozen facility options are available "
-        "for this incident and scenario."
-    )
+incident_row = get_incident_report(
+    selected_scenario,
+    selected_incident
+)
+
+if incident_row is None or incident_row.empty:
+
+    st.info("No emergency intelligence is available for this incident.")
 
 else:
 
-    for _, facility in facility_options.iterrows():
+    incident = incident_row.iloc[0]
 
-        facility_rank = safe_int(
-            facility.get(
-                "facility_rank",
-                np.nan
-            ),
-            0
-        )
+    # --------------------------------------------------------
+    # Recommended facility / route
+    # --------------------------------------------------------
 
-        facility_id = str(
-            facility.get(
-                "facility_id",
-                ""
+    recommended_facility_id = incident.get("recommended_facility_id")
+    recommended_facility_rank = incident.get("facility_rank", 1)
+    recommended_route_rank = incident.get("route_rank", 1)
+
+    # --------------------------------------------------------
+    # Facility options
+    # --------------------------------------------------------
+
+    facility_options = get_facility_options(
+        selected_scenario,
+        selected_incident
+    )
+
+    if facility_options is None or facility_options.empty:
+
+        st.info("No facility options are available for this incident.")
+
+    else:
+
+        facility_options = facility_options.copy()
+
+        # ----------------------------------------------------
+        # Sort by authoritative frozen facility rank
+        # ----------------------------------------------------
+
+        if "facility_rank" in facility_options.columns:
+            facility_options = facility_options.sort_values(
+                "facility_rank"
             )
-        )
 
-        facility_name = str(
-            facility.get(
-                "facility_name",
-                "Unnamed facility"
+        # ----------------------------------------------------
+        # Display each facility
+        # ----------------------------------------------------
+
+        for _, facility in facility_options.iterrows():
+
+            facility_rank = int(
+                facility.get("facility_rank", 0)
             )
-        )
 
-        facility_type = str(
-            facility.get(
-                "facility_type",
-                "Facility"
+            facility_id = str(
+                facility.get("facility_id", "")
             )
-        )
 
-        travel_time = safe_float(
-            facility.get(
-                "travel_time_min",
-                np.nan
+            facility_name = str(
+                facility.get("facility_name", "Unknown facility")
             )
-        )
 
-        normal_time = safe_float(
-            facility.get(
-                "normal_travel_time_min",
-                np.nan
+            facility_type = str(
+                facility.get("facility_type", "Facility")
             )
-        )
 
-        delay = safe_float(
-            facility.get(
-                "response_delay_min",
-                np.nan
+            response_time = float(
+                facility.get("travel_time_min", 0)
             )
-        )
 
-        reachable = bool(
-            facility.get(
+            normal_time = float(
+                facility.get("normal_travel_time_min", 0)
+            )
+
+            response_delay = float(
+                facility.get("response_delay_min", 0)
+            )
+
+            response_delay_pct = float(
+                facility.get("response_delay_pct", 0)
+            )
+
+            reachable = facility.get(
                 "reachable",
-                False
+                True
             )
-        )
 
-        is_recommended = (
-            str(
-                recommended_facility_id
+            is_recommended = (
+                facility_id == recommended_facility_id
             )
-            == facility_id
-        )
 
-        border_class = (
-            "recommended-route"
-            if is_recommended
-            else ""
-        )
+            # ------------------------------------------------
+            # Facility card styling
+            # ------------------------------------------------
 
-        st.markdown(
-            f"""
-            <div class="facility-card">
-                <div class="facility-rank">
-                    Facility option {facility_rank}
-                    {" • RECOMMENDED" if is_recommended else ""}
-                </div>
+            if is_recommended:
 
-                <div class="facility-name">
-                    {facility_name}
-                </div>
+                card_border = "#16a34a"
+                card_background = "#f0fdf4"
+                badge_background = "#16a34a"
+                badge_text = "RECOMMENDED"
 
-                <div style="color:#64748b;">
-                    {facility_type}
-                    &nbsp; • &nbsp;
-                    {facility_id}
-                </div>
+            else:
 
-                <div style="margin-top:6px;">
-                    <b>Response:</b>
-                    {fmt_minutes(travel_time)}
-                    &nbsp; | &nbsp;
-                    <b>Normal:</b>
-                    {fmt_minutes(normal_time)}
-                    &nbsp; | &nbsp;
-                    <b>Delay:</b>
-                    {fmt_minutes(delay)}
-                    &nbsp; | &nbsp;
-                    <b>Reachable:</b>
-                    {"Yes" if reachable else "No"}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+                card_border = "#cbd5e1"
+                card_background = "#ffffff"
+                badge_background = "#64748b"
+                badge_text = f"OPTION {facility_rank}"
 
-        # ----------------------------------------------------
-        # Routes belonging to this facility
-        # ----------------------------------------------------
+            reachable_text = (
+                "Yes"
+                if bool(reachable)
+                else "No"
+            )
 
-        route_options = get_route_options(
-            scenario,
-            incident_id,
-            facility_rank,
-        )
+            reachable_color = (
+                "#16a34a"
+                if bool(reachable)
+                else "#dc2626"
+            )
 
-        if len(route_options) == 0:
+            # ------------------------------------------------
+            # Facility card
+            # ------------------------------------------------
 
             st.markdown(
-                """
-                <div class="route-row">
-                    No frozen route alternative is available
-                    for this facility.
+                f"""
+                <div style="
+                    border:1px solid {card_border};
+                    border-radius:12px;
+                    background:{card_background};
+                    padding:16px;
+                    margin-top:14px;
+                    margin-bottom:8px;
+                ">
+
+                    <div style="
+                        display:flex;
+                        justify-content:space-between;
+                        align-items:center;
+                        margin-bottom:8px;
+                    ">
+
+                        <div style="
+                            font-size:12px;
+                            font-weight:700;
+                            color:white;
+                            background:{badge_background};
+                            padding:4px 9px;
+                            border-radius:999px;
+                            letter-spacing:0.3px;
+                        ">
+                            {badge_text}
+                        </div>
+
+                        <div style="
+                            font-size:12px;
+                            color:#64748b;
+                            font-weight:600;
+                        ">
+                            Facility rank {facility_rank}
+                        </div>
+
+                    </div>
+
+                    <div style="
+                        font-size:18px;
+                        font-weight:700;
+                        color:#0f172a;
+                        margin-bottom:3px;
+                    ">
+                        {facility_name}
+                    </div>
+
+                    <div style="
+                        color:#64748b;
+                        font-size:13px;
+                    ">
+                        {facility_type}
+                        &nbsp; • &nbsp;
+                        {facility_id}
+                    </div>
+
+                    <div style="
+                        display:flex;
+                        flex-wrap:wrap;
+                        gap:22px;
+                        margin-top:13px;
+                        padding-top:10px;
+                        border-top:1px solid #e2e8f0;
+                    ">
+
+                        <div>
+                            <div style="
+                                font-size:11px;
+                                color:#64748b;
+                            ">
+                                RESPONSE
+                            </div>
+                            <div style="
+                                font-size:17px;
+                                font-weight:700;
+                                color:#0f172a;
+                            ">
+                                {response_time:.2f} min
+                            </div>
+                        </div>
+
+                        <div>
+                            <div style="
+                                font-size:11px;
+                                color:#64748b;
+                            ">
+                                NORMAL
+                            </div>
+                            <div style="
+                                font-size:17px;
+                                font-weight:700;
+                                color:#0f172a;
+                            ">
+                                {normal_time:.2f} min
+                            </div>
+                        </div>
+
+                        <div>
+                            <div style="
+                                font-size:11px;
+                                color:#64748b;
+                            ">
+                                DELAY
+                            </div>
+                            <div style="
+                                font-size:17px;
+                                font-weight:700;
+                                color:#dc2626;
+                            ">
+                                +{response_delay:.2f} min
+                            </div>
+                        </div>
+
+                        <div>
+                            <div style="
+                                font-size:11px;
+                                color:#64748b;
+                            ">
+                                REACHABLE
+                            </div>
+                            <div style="
+                                font-size:17px;
+                                font-weight:700;
+                                color:{reachable_color};
+                            ">
+                                {reachable_text}
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <div style="
+                        margin-top:8px;
+                        font-size:12px;
+                        color:#64748b;
+                    ">
+                        Delay relative to normal:
+                        <b>{response_delay_pct:,.1f}%</b>
+                    </div>
+
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-        else:
+            # ------------------------------------------------
+            # Route alternatives for this facility
+            # ------------------------------------------------
 
-            for _, route in route_options.iterrows():
+            routes_for_facility = get_route_options(
+                selected_scenario,
+                selected_incident,
+                facility_rank=facility_rank
+            )
 
-                route_rank = safe_int(
-                    route.get(
-                        "route_rank",
-                        np.nan
-                    ),
-                    0
+            if (
+                routes_for_facility is None
+                or routes_for_facility.empty
+            ):
+                st.caption(
+                    "No route alternatives available for this facility."
+                )
+                continue
+
+            routes_for_facility = routes_for_facility.copy()
+
+            if "route_rank" in routes_for_facility.columns:
+                routes_for_facility = routes_for_facility.sort_values(
+                    "route_rank"
                 )
 
-                response_time = safe_float(
-                    route.get(
-                        "response_time_min",
-                        np.nan
-                    )
+            st.markdown(
+                """
+                <div style="
+                    margin-left:20px;
+                    margin-top:8px;
+                    margin-bottom:4px;
+                    font-size:13px;
+                    font-weight:700;
+                    color:#334155;
+                ">
+                    Available response routes
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # ------------------------------------------------
+            # Route cards
+            # ------------------------------------------------
+
+            for _, route in routes_for_facility.iterrows():
+
+                route_rank = int(
+                    route.get("route_rank", 0)
                 )
 
-                route_length = safe_float(
-                    route.get(
-                        "route_length_m",
-                        np.nan
-                    )
+                route_response = float(
+                    route.get("response_time_min", 0)
                 )
 
-                affected_segments = safe_int(
-                    route.get(
-                        "affected_segments",
-                        np.nan
-                    ),
-                    0
+                route_normal = float(
+                    route.get("normal_travel_time_min", 0)
                 )
 
-                closed_segments = safe_int(
-                    route.get(
-                        "closed_segments",
-                        np.nan
-                    ),
-                    0
+                route_delay = float(
+                    route.get("response_delay_min", 0)
                 )
 
-                delay_pct = safe_float(
-                    route.get(
-                        "response_delay_pct",
-                        np.nan
-                    )
+                route_delay_pct = float(
+                    route.get("response_delay_pct", 0)
                 )
 
-                recommended = (
+                route_length = float(
+                    route.get("route_length_m", 0)
+                )
+
+                affected_segments = int(
+                    route.get("affected_segments", 0)
+                )
+
+                closed_segments = int(
+                    route.get("closed_segments", 0)
+                )
+
+                route_is_recommended = (
                     is_recommended
-                    and route_rank
-                    ==
-                    safe_int(
-                        incident_report.get(
-                            "route_rank",
-                            1
-                        ),
-                        1
-                    )
+                    and route_rank == recommended_route_rank
                 )
 
-                route_class = (
-                    "route-row recommended-route"
-                    if recommended
-                    else "route-row"
-                )
+                # --------------------------------------------
+                # Route styling
+                # --------------------------------------------
+
+                if route_is_recommended:
+
+                    route_border = "#22c55e"
+                    route_background = "#f7fee7"
+                    route_badge = "RECOMMENDED"
+                    route_badge_color = "#16a34a"
+
+                else:
+
+                    route_border = "#e2e8f0"
+                    route_background = "#ffffff"
+                    route_badge = f"ROUTE {route_rank}"
+                    route_badge_color = "#64748b"
+
+                # --------------------------------------------
+                # Route card
+                # --------------------------------------------
 
                 st.markdown(
                     f"""
-                    <div class="{route_class}">
-                        <b>Route {route_rank}</b>
-                        {" • RECOMMENDED" if recommended else ""}
-                        <br>
+                    <div style="
+                        margin-left:20px;
+                        border-left:3px solid {route_border};
+                        border-top:1px solid #e2e8f0;
+                        border-right:1px solid #e2e8f0;
+                        border-bottom:1px solid #e2e8f0;
+                        border-radius:8px;
+                        background:{route_background};
+                        padding:12px 15px;
+                        margin-bottom:8px;
+                    ">
 
-                        Response:
-                        <b>
-                            {fmt_minutes(response_time)}
-                        </b>
+                        <div style="
+                            display:flex;
+                            justify-content:space-between;
+                            align-items:center;
+                            margin-bottom:8px;
+                        ">
 
-                        &nbsp; | &nbsp;
+                            <div style="
+                                font-size:12px;
+                                font-weight:700;
+                                color:white;
+                                background:{route_badge_color};
+                                padding:3px 8px;
+                                border-radius:999px;
+                            ">
+                                {route_badge}
+                            </div>
 
-                        Length:
-                        <b>
-                            {fmt_number(route_length)} m
-                        </b>
+                            <div style="
+                                font-size:12px;
+                                color:#64748b;
+                            ">
+                                Route {route_rank}
+                            </div>
 
-                        &nbsp; | &nbsp;
+                        </div>
 
-                        Affected:
-                        <b>
-                            {affected_segments}
-                        </b>
+                        <div style="
+                            display:flex;
+                            flex-wrap:wrap;
+                            gap:18px;
+                            font-size:13px;
+                            color:#334155;
+                        ">
 
-                        &nbsp; | &nbsp;
+                            <div>
+                                <span style="color:#64748b;">
+                                    Response
+                                </span><br>
+                                <b>{route_response:.2f} min</b>
+                            </div>
 
-                        Closed:
-                        <b>
-                            {closed_segments}
-                        </b>
+                            <div>
+                                <span style="color:#64748b;">
+                                    Length
+                                </span><br>
+                                <b>{route_length:,.0f} m</b>
+                            </div>
 
-                        &nbsp; | &nbsp;
+                            <div>
+                                <span style="color:#64748b;">
+                                    Affected segments
+                                </span><br>
+                                <b>{affected_segments}</b>
+                            </div>
 
-                        Delay:
-                        <b>
-                            {fmt_pct(delay_pct)}
-                        </b>
+                            <div>
+                                <span style="color:#64748b;">
+                                    Closed segments
+                                </span><br>
+                                <b>{closed_segments}</b>
+                            </div>
+
+                            <div>
+                                <span style="color:#64748b;">
+                                    Delay
+                                </span><br>
+                                <b>+{route_delay:.2f} min</b>
+                            </div>
+
+                        </div>
+
+                        <div style="
+                            margin-top:8px;
+                            font-size:12px;
+                            color:#64748b;
+                        ">
+                            Normal route time:
+                            <b>{route_normal:.2f} min</b>
+                            &nbsp; • &nbsp;
+                            Relative delay:
+                            <b>{route_delay_pct:,.1f}%</b>
+                        </div>
+
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
+
+else:
+
+    st.info(
+        "Select an incident to view facility and route intelligence."
+    )
 
 
 # ============================================================
