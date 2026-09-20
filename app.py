@@ -362,7 +362,7 @@ def prepare_roads_for_map(
     scenario
 ):
 
-    roads = roads.copy()
+    roads = _roads.copy()
 
     return roads.to_crs("EPSG:4326")
 
