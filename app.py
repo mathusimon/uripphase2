@@ -357,21 +357,13 @@ with k5:
 # ============================================================
 
 @st.cache_data
-def prepare_roads_for_map(
-    _roads,
-    scenario
-):
-
+def prepare_roads_for_map(_roads, scenario):
     roads = _roads.copy()
-
     return roads.to_crs("EPSG:4326")
 
 
 @st.cache_data
-def prepare_facilities_for_map(
-    _facilities
-):
-
+def prepare_facilities_for_map(_facilities):
     return _facilities.to_crs("EPSG:4326")
 
 
@@ -382,6 +374,15 @@ roads_map = prepare_roads_for_map(
 
 facilities_map = prepare_facilities_for_map(
     get_scenario_facilities(scenario)
+)
+
+
+# Create the Folium map BEFORE adding any layers
+m = folium.Map(
+    location=[-1.2864, 36.8172],
+    zoom_start=13,
+    tiles="CartoDB positron",
+    control_scale=True
 )
 
 
