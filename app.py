@@ -2642,7 +2642,7 @@ else:
                     unsafe_allow_html=True,
                 )
 
-else:
+
 
     st.info(
         "Select an incident to view facility and route intelligence."
