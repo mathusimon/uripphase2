@@ -157,13 +157,20 @@ def fmt_pct(value):
 
 def render_html(html, target=None):
     """
-    st.markdown(unsafe_allow_html=True) treats any line indented by
-    4+ spaces as a Markdown code block, which breaks HTML strings
-    built from indented f-strings. Dedent first so nested blocks
-    (loops, ifs) don't accidentally trigger that. `target` lets this
-    be used on st itself or on a column/container object.
+    st.markdown(unsafe_allow_html=True) still runs input through a
+    Markdown/CommonMark parser first. Two things break raw HTML built
+    from indented f-strings:
+      1. Leading whitespace on lines (4+ spaces) can be read as an
+         indented code block.
+      2. Any line that ends up blank or whitespace-only (e.g. a
+         conditional placeholder like {"" if not x else "badge"} sitting
+         alone on its own line) terminates the HTML block early, so
+         everything after it gets re-parsed as plain text/code.
+    Dedent to fix (1) and drop any resulting blank lines to fix (2).
     """
-    (target or st).markdown(textwrap.dedent(html).strip(), unsafe_allow_html=True)
+    dedented = textwrap.dedent(html).strip()
+    collapsed = "\n".join(line for line in dedented.splitlines() if line.strip() != "")
+    (target or st).markdown(collapsed, unsafe_allow_html=True)
 
 
 def get_df(obj):
@@ -1128,14 +1135,12 @@ else:
         reachable = bool(facility.get("reachable", False))
 
         is_recommended = str(recommended_facility_id) == facility_id
+        facility_badge = " • RECOMMENDED" if is_recommended else ""
 
         render_html(
             f"""
             <div class="facility-card">
-                <div class="facility-rank">
-                    Facility option {facility_rank}
-                    {" • RECOMMENDED" if is_recommended else ""}
-                </div>
+                <div class="facility-rank">Facility option {facility_rank}{facility_badge}</div>
                 <div class="facility-name">{facility_name}</div>
                 <div style="color:#64748b;">{facility_type} &nbsp; • &nbsp; {facility_id}</div>
                 <div style="margin-top:6px;">
@@ -1172,13 +1177,12 @@ else:
                 incident_report.get("route_rank", 1), 1
             )
             route_class = "route-row recommended-route" if recommended else "route-row"
+            route_badge = " • RECOMMENDED" if recommended else ""
 
             render_html(
                 f"""
                 <div class="{route_class}">
-                    <b>Route {route_rank}</b>
-                    {" • RECOMMENDED" if recommended else ""}
-                    <br>
+                    <b>Route {route_rank}</b>{route_badge}<br>
                     Response: <b>{fmt_minutes(response_time)}</b>
                     &nbsp; | &nbsp;
                     Length: <b>{fmt_number(route_length)} m</b>
