@@ -866,26 +866,185 @@ def add_flood_raster(fmap, scenario):
 # ROAD / TRAFFIC MAP
 # ============================================================
 
-def add_roads_layer(fmap, roads):
-    """
-    Visualize the frozen traffic model using final V/C ratio.
-
-    V/C ratio:
-        < 0.60       Free flow
-        0.60–0.80    Moderate
-        0.80–1.00    Heavy
-        > 1.00       Oversaturated
-
-    Closed roads remain dark red regardless of V/C ratio.
-    """
-
-    if roads is None or len(roads) == 0:
-        return
+def add_roads_layer(m, roads):
 
     roads = prepare_gdf(roads)
 
-    if len(roads) == 0:
-        return
+    if roads.empty:
+        return None
+
+    if "final_vc_ratio" not in roads.columns:
+        return None
+
+    traffic_group = folium.FeatureGroup(
+        name="Traffic / V-C Ratio",
+        show=True,
+    )
+
+    roads = roads.copy()
+
+    roads["vc"] = pd.to_numeric(
+        roads["final_vc_ratio"],
+        errors="coerce"
+    )
+
+    roads["passability_num"] = pd.to_numeric(
+        roads.get("passability"),
+        errors="coerce"
+    )
+
+    def road_style(feature):
+
+        props = feature.get("properties", {})
+
+        vc = props.get("vc")
+        passability = props.get("passability_num")
+
+        try:
+            vc = float(vc)
+        except:
+            vc = np.nan
+
+        try:
+            passability = float(passability)
+        except:
+            passability = np.nan
+
+        # CLOSED
+        if (
+            np.isfinite(passability)
+            and passability <= 0.001
+        ):
+            return {
+                "color": "#7f0000",
+                "weight": 5,
+                "opacity": 0.95,
+            }
+
+        # NO V/C DATA
+        if not np.isfinite(vc):
+            return {
+                "color": "#808080",
+                "weight": 2,
+                "opacity": 0.45,
+            }
+
+        # FREE FLOW
+        if vc < 0.60:
+            return {
+                "color": "#16a34a",
+                "weight": 3,
+                "opacity": 0.85,
+            }
+
+        # MODERATE
+        if vc < 0.80:
+            return {
+                "color": "#facc15",
+                "weight": 4,
+                "opacity": 0.90,
+            }
+
+        # HEAVY
+        if vc <= 1.00:
+            return {
+                "color": "#f97316",
+                "weight": 5,
+                "opacity": 0.92,
+            }
+
+        # OVERSATURATED
+        return {
+            "color": "#dc2626",
+            "weight": 6,
+            "opacity": 0.95,
+        }
+
+    def road_popup(feature):
+
+        p = feature.get("properties", {})
+
+        road_id = p.get("road_id", "—")
+        vc = p.get("vc")
+        volume = p.get("final_volume_vph")
+        capacity = p.get("capacity_vph")
+        passability = p.get("passability_num")
+
+        try:
+            vc_text = f"{float(vc):.2f}"
+        except:
+            vc_text = "N/A"
+
+        try:
+            volume_text = f"{float(volume):,.0f}"
+        except:
+            volume_text = "N/A"
+
+        try:
+            capacity_text = f"{float(capacity):,.0f}"
+        except:
+            capacity_text = "N/A"
+
+        try:
+            passability_text = f"{float(passability):.2f}"
+        except:
+            passability_text = "N/A"
+
+        html = f"""
+        <div style="
+            font-family:Arial;
+            min-width:210px;
+            font-size:13px;
+        ">
+
+            <div style="
+                font-size:15px;
+                font-weight:700;
+                margin-bottom:8px;
+            ">
+                Road Traffic
+            </div>
+
+            <b>Road:</b> {road_id}<br>
+            <b>V/C ratio:</b> {vc_text}<br>
+            <b>Final volume:</b> {volume_text} veh/hr<br>
+            <b>Capacity:</b> {capacity_text} veh/hr<br>
+            <b>Passability:</b> {passability_text}
+
+        </div>
+        """
+
+        return folium.Popup(
+            html,
+            max_width=280
+        )
+
+    folium.GeoJson(
+        roads.to_json(),
+        name="Traffic",
+        style_function=road_style,
+        popup_function=road_popup,
+        tooltip=folium.GeoJsonTooltip(
+            fields=[
+                "road_id",
+                "vc",
+                "final_volume_vph",
+                "capacity_vph",
+            ],
+            aliases=[
+                "Road",
+                "V/C",
+                "Final Volume",
+                "Capacity",
+            ],
+            localize=True,
+            sticky=False,
+        ),
+    ).add_to(traffic_group)
+
+    traffic_group.add_to(m)
+
+    return traffic_group
 
     # --------------------------------------------------------
     # Ensure numeric traffic fields
