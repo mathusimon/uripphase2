@@ -218,13 +218,107 @@ def get_df(obj):
     return obj if isinstance(obj, (pd.DataFrame, gpd.GeoDataFrame)) else None
 
 
+
+def resolve_model_scenario(scenario):
+    """
+    Convert the dashboard scenario label to the exact scenario key
+    used by the frozen model.
+    """
+    dashboard_scenario = str(scenario).strip()
+
+    aliases = {
+        "Normal": [
+            "Normal",
+            "normal",
+        ],
+        "Moderate Rainfall": [
+            "Moderate Rainfall",
+            "Moderate",
+            "moderate",
+        ],
+        "Heavy Rainfall": [
+            "Heavy Rainfall",
+            "Heavy",
+            "heavy",
+        ],
+        "Severe Rainfall": [
+            "Severe Rainfall",
+            "Severe",
+            "severe",
+        ],
+    }
+
+    candidates = aliases.get(
+        dashboard_scenario,
+        [dashboard_scenario],
+    )
+
+    # First search the flood section because the flood map
+    # must use the exact key from MODEL["flood"].
+    flood = MODEL.get("flood", {})
+
+    if isinstance(flood, dict):
+        available_keys = {
+            str(key).strip().lower(): key
+            for key in flood.keys()
+        }
+
+        for candidate in candidates:
+            matched_key = available_keys.get(
+                str(candidate).strip().lower()
+            )
+
+            if matched_key is not None:
+                return matched_key
+
+    # Fallback to other scenario-based model sections.
+    for section_name in [
+        "traffic",
+        "roads",
+        "facilities",
+    ]:
+        section = MODEL.get(section_name, {})
+
+        if not isinstance(section, dict):
+            continue
+
+        available_keys = {
+            str(key).strip().lower(): key
+            for key in section.keys()
+        }
+
+        for candidate in candidates:
+            matched_key = available_keys.get(
+                str(candidate).strip().lower()
+            )
+
+            if matched_key is not None:
+                return matched_key
+
+    return dashboard_scenario
+
+
 def scenario_rows(df, scenario):
-    """Return rows belonging to a scenario."""
+    """Return rows belonging to the selected rainfall scenario."""
     if df is None or len(df) == 0:
         return df
+
     if "scenario" not in df.columns:
         return df.iloc[0:0].copy()
-    return df[df["scenario"].astype(str) == str(scenario)].copy()
+
+    model_scenario = resolve_model_scenario(scenario)
+
+    values = (
+        df["scenario"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
+
+    return df[
+        values
+        == str(model_scenario).strip().lower()
+    ].copy()
 
 
 def first_value(df, columns, default=np.nan):
@@ -372,15 +466,43 @@ def get_route_options(scenario, incident_id, facility_rank):
 # ============================================================
 
 def get_roads(scenario):
-    roads = MODEL["traffic"].get(scenario)
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
+
+    roads = MODEL.get(
+        "traffic",
+        {},
+    ).get(model_scenario)
+
     if roads is None:
-        roads = MODEL["roads"].get(scenario)
-    return roads.copy() if roads is not None else gpd.GeoDataFrame()
+        roads = MODEL.get(
+            "roads",
+            {},
+        ).get(model_scenario)
+
+    return (
+        roads.copy()
+        if roads is not None
+        else gpd.GeoDataFrame()
+    )
 
 
 def get_facilities(scenario):
-    facilities = MODEL["facilities"].get(scenario)
-    return facilities.copy() if facilities is not None else gpd.GeoDataFrame()
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
+
+    facilities = MODEL.get(
+        "facilities",
+        {},
+    ).get(model_scenario)
+
+    return (
+        facilities.copy()
+        if facilities is not None
+        else gpd.GeoDataFrame()
+    )
 
 
 def get_incidents():
@@ -401,63 +523,16 @@ def get_incident_flood(scenario):
     return gpd.GeoDataFrame()
 
 
-def resolve_model_scenario(scenario):
-    """
-    Convert the dashboard rainfall label to the corresponding
-    scenario key stored in the frozen model.
-    """
-    dashboard_scenario = str(scenario).strip()
-
-    aliases = {
-        "Normal": [
-            "Normal",
-        ],
-        "Moderate Rainfall": [
-            "Moderate Rainfall",
-            "Moderate",
-        ],
-        "Heavy Rainfall": [
-            "Heavy Rainfall",
-            "Heavy",
-        ],
-        "Severe Rainfall": [
-            "Severe Rainfall",
-            "Severe",
-        ],
-    }
-
-    candidates = aliases.get(
-        dashboard_scenario,
-        [dashboard_scenario],
-    )
-
-    flood = MODEL.get("flood", {})
-
-    if isinstance(flood, dict):
-        available_keys = {
-            str(key).strip()
-            for key in flood.keys()
-        }
-
-        for candidate in candidates:
-            if candidate in available_keys:
-                return candidate
-
-    return dashboard_scenario
-
-
 def get_flood_array(scenario):
     """
-    Retrieve the flood raster for the selected rainfall scenario.
+    Return the flood raster for the selected rainfall scenario.
     """
     flood = MODEL.get("flood", {})
 
     if not isinstance(flood, dict):
         return None
 
-    model_scenario = resolve_model_scenario(
-        scenario
-    )
+    model_scenario = resolve_model_scenario(scenario)
 
     value = flood.get(model_scenario)
 
