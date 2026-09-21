@@ -67,6 +67,35 @@ FLOOD_CLASS_COLORS = {
     "Very High": "#1d4ed8",  # deep blue
 }
 
+# One solid colour per rainfall scenario.
+SCENARIO_FLOOD_COLORS = {
+    "Normal": "#bfdbfe",
+    "Moderate Rainfall": "#60a5fa",
+    "Heavy Rainfall": "#2563eb",
+    "Severe Rainfall": "#1e3a8a",
+}
+
+# Incident marker colours by flood-risk class.
+INCIDENT_MARKER_COLORS = {
+    "Low": "green",
+    "Moderate": "orange",
+    "High": "red",
+    "Very High": "darkred",
+    "Unknown": "gray",
+}
+
+# Facility marker colours by facility type.
+FACILITY_MARKER_COLORS = {
+    "Hospital": "red",
+    "Health Facility": "red",
+    "Police": "blue",
+    "Police Station": "blue",
+    "Fire Station": "orange",
+    "Ambulance": "purple",
+    "Shelter": "green",
+    "Emergency Centre": "darkblue",
+    "default": "cadetblue",
+}
 EXPECTED_SECTIONS = [
     "metadata", "scenarios", "flood", "roads", "facilities", "population",
     "incidents", "facility_options", "routes", "traffic", "emergency", "summary",
@@ -136,7 +165,26 @@ def safe_int(value, default=0):
         return int(round(float(value)))
     except Exception:
         return default
+def safe_bool(value, default=False):
+    if value is None:
+        return default
 
+    if isinstance(value, str):
+        value = value.strip().lower()
+
+        if value in {"true", "1", "yes", "y", "affected"}:
+            return True
+
+        if value in {"false", "0", "no", "n", "not affected"}:
+            return False
+
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+
+    return bool(value)
 
 def fmt_number(value, decimals=0):
     value = safe_float(value)
@@ -524,46 +572,63 @@ def add_geojson(fmap, gdf, name, style_function, tooltip=None, show=False):
 
 def add_flood_raster(fmap, scenario):
     array = get_flood_array(scenario)
+
     if array is None:
         return
 
     try:
         array = np.asarray(array)
+
         if array.ndim != 2:
             return
 
         finite = np.isfinite(array)
+
         if not finite.any():
             return
 
-        minimum = np.nanmin(array)
-        maximum = np.nanmax(array)
+        hex_colour = SCENARIO_FLOOD_COLORS.get(
+            scenario,
+            "#2563eb",
+        )
 
-        if maximum > minimum:
-            normalized = (array - minimum) / (maximum - minimum)
-        else:
-            normalized = np.zeros_like(array, dtype=float)
+        hex_colour = hex_colour.lstrip("#")
 
-        # Transparent RGBA flood overlay.
-        rgba = np.zeros((*normalized.shape, 4), dtype=np.uint8)
-        rgba[:, :, 0] = 120
-        rgba[:, :, 1] = 180
-        rgba[:, :, 2] = 230
+        red = int(hex_colour[0:2], 16)
+        green = int(hex_colour[2:4], 16)
+        blue = int(hex_colour[4:6], 16)
 
-        alpha = (normalized * 190).astype(np.uint8)
-        alpha[~finite] = 0
-        rgba[:, :, 3] = alpha
+        rgba = np.zeros(
+            (*array.shape, 4),
+            dtype=np.uint8,
+        )
 
-        image = Image.fromarray(rgba, mode="RGBA")
+        # Every valid flood pixel receives the same solid colour.
+        rgba[:, :, 0] = red
+        rgba[:, :, 1] = green
+        rgba[:, :, 2] = blue
+        rgba[:, :, 3] = 0
+
+        # Transparent nodata cells; opaque valid flood cells.
+        rgba[finite, 3] = 190
+
+        image = Image.fromarray(
+            rgba,
+            mode="RGBA",
+        )
+
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
-        encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        encoded = base64.b64encode(
+            buffer.getvalue()
+        ).decode("utf-8")
 
         folium.raster_layers.ImageOverlay(
             image="data:image/png;base64," + encoded,
             bounds=FLOOD_BOUNDS,
-            opacity=0.55,
-            name=f"{scenario} flood impact",
+            opacity=0.75,
+            name=f"{scenario} flood extent",
             interactive=True,
             cross_origin=False,
             zindex=1,
@@ -622,11 +687,16 @@ def add_roads_layer(fmap, roads):
 # FACILITY MAP
 # ============================================================
 
-def add_facilities_layer(fmap, facilities, recommended_facility_id=None):
+def add_facilities_layer(
+    fmap,
+    facilities,
+    recommended_facility_id=None,
+):
     if facilities is None or len(facilities) == 0:
         return None
 
     facilities = prepare_gdf(facilities)
+
     if len(facilities) == 0:
         return None
 
@@ -637,64 +707,101 @@ def add_facilities_layer(fmap, facilities, recommended_facility_id=None):
 
     for _, row in facilities.iterrows():
         geometry = row.geometry
+
         if geometry is None:
             continue
 
         try:
             if geometry.geom_type == "Point":
-                lat, lon = geometry.y, geometry.x
+                point = geometry
             else:
                 point = geometry.centroid
-                lat, lon = point.y, point.x
+
+            lat = point.y
+            lon = point.x
+
         except Exception:
             continue
 
-        facility_id = str(row.get("facility_id", ""))
-        facility_name = str(row.get("name", row.get("facility_name", "Facility")))
-        facility_type = str(row.get("facility_type", "Facility"))
-        operationally_affected = row.get("operationally_affected", False)
+        facility_id = str(
+            row.get("facility_id", "")
+        )
+
+        facility_name = str(
+            row.get(
+                "name",
+                row.get(
+                    "facility_name",
+                    "Facility",
+                ),
+            )
+        )
+
+        facility_type = str(
+            row.get(
+                "facility_type",
+                "Facility",
+            )
+        )
+
+        affected = safe_bool(
+            row.get(
+                "operationally_affected",
+                False,
+            )
+        )
 
         is_recommended = (
             recommended_facility_id is not None
-            and facility_id == str(recommended_facility_id)
+            and facility_id
+            == str(recommended_facility_id)
         )
 
         if is_recommended:
-            color, radius, fill_opacity = "#00d9ff", 11, 1.0
-        elif bool(operationally_affected):
-            color, radius, fill_opacity = "#ef4444", 6, 0.85
-        else:
-            color, radius, fill_opacity = "#2563eb", 5, 0.75
-
-        if is_recommended:
+            marker_colour = "lightblue"
+            marker_icon = "star"
             status_text = "Recommended"
-        elif bool(operationally_affected):
+
+        elif affected:
+            marker_colour = "red"
+            marker_icon = "exclamation-triangle"
             status_text = "Operationally affected"
+
         else:
+            marker_colour = FACILITY_MARKER_COLORS.get(
+                facility_type,
+                FACILITY_MARKER_COLORS["default"],
+            )
+            marker_icon = "plus"
             status_text = "Operational"
 
         popup_html = f"""
         <div style="font-family:Arial;min-width:220px;">
-            <h4 style="margin-bottom:6px;">{facility_name}</h4>
+            <h4 style="margin-bottom:6px;">
+                {facility_name}
+            </h4>
             <b>Facility ID:</b> {facility_id}<br>
             <b>Type:</b> {facility_type}<br>
             <b>Status:</b> {status_text}
         </div>
         """
 
-        folium.CircleMarker(
+        folium.Marker(
             location=[lat, lon],
-            radius=radius,
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=fill_opacity,
-            weight=2,
-            popup=folium.Popup(popup_html, max_width=320),
             tooltip=facility_name,
+            popup=folium.Popup(
+                popup_html,
+                max_width=320,
+            ),
+            icon=folium.Icon(
+                color=marker_colour,
+                icon=marker_icon,
+                prefix="fa",
+            ),
         ).add_to(facility_layer)
 
     facility_layer.add_to(fmap)
+
     return facility_layer
 
 
@@ -702,11 +809,16 @@ def add_facilities_layer(fmap, facilities, recommended_facility_id=None):
 # INCIDENT MAP
 # ============================================================
 
-def add_incidents_layer(fmap, incidents, selected_incident):
+def add_incidents_layer(
+    fmap,
+    incidents,
+    selected_incident,
+):
     if incidents is None or len(incidents) == 0:
         return None
 
     incidents = prepare_gdf(incidents)
+
     if len(incidents) == 0:
         return None
 
@@ -717,33 +829,79 @@ def add_incidents_layer(fmap, incidents, selected_incident):
 
     for _, row in incidents.iterrows():
         geometry = row.geometry
+
         if geometry is None:
             continue
 
         try:
-            lat, lon = geometry.y, geometry.x
+            if geometry.geom_type == "Point":
+                point = geometry
+            else:
+                point = geometry.centroid
+
+            lat = point.y
+            lon = point.x
+
         except Exception:
             continue
 
-        incident_id = str(row.get("incident_id", ""))
-        selected = incident_id == str(selected_incident)
+        incident_id = str(
+            row.get("incident_id", "")
+        )
 
-        color = "#f59e0b" if selected else "#fbbf24"
-        radius = 10 if selected else 6
+        flood_class = str(
+            row.get(
+                "flood_class",
+                row.get(
+                    "incident_flood_class",
+                    "Unknown",
+                ),
+            )
+        )
 
-        folium.CircleMarker(
+        selected = (
+            incident_id
+            == str(selected_incident)
+        )
+
+        if selected:
+            marker_colour = "black"
+            marker_icon = "star"
+            status_text = "Selected incident"
+        else:
+            marker_colour = INCIDENT_MARKER_COLORS.get(
+                flood_class,
+                INCIDENT_MARKER_COLORS["Unknown"],
+            )
+            marker_icon = "warning-sign"
+            status_text = flood_class
+
+        popup_html = f"""
+        <div style="font-family:Arial;min-width:200px;">
+            <h4 style="margin-bottom:6px;">
+                Incident {incident_id}
+            </h4>
+            <b>Flood class:</b> {flood_class}<br>
+            <b>Status:</b> {status_text}
+        </div>
+        """
+
+        folium.Marker(
             location=[lat, lon],
-            radius=radius,
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.95,
-            weight=2,
-            tooltip=incident_id,
-            popup=incident_id,
+            tooltip=f"{incident_id} — {flood_class}",
+            popup=folium.Popup(
+                popup_html,
+                max_width=300,
+            ),
+            icon=folium.Icon(
+                color=marker_colour,
+                icon=marker_icon,
+                prefix="glyphicon",
+            ),
         ).add_to(incident_layer)
 
     incident_layer.add_to(fmap)
+
     return incident_layer
 
 
