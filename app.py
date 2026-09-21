@@ -384,6 +384,7 @@ def get_flood_array(scenario):
 # ============================================================
 
 def get_dashboard_kpis(scenario):
+
     kpi = get_emergency_kpi(scenario)
     situation = get_situation(scenario)
     roads = get_roads(scenario)
@@ -392,6 +393,7 @@ def get_dashboard_kpis(scenario):
     # --------------------------------------------------------
     # Flood impact
     # --------------------------------------------------------
+
     flood_impact = first_value(
         pd.DataFrame([kpi]),
         ["mean_flood_impact"]
@@ -406,15 +408,14 @@ def get_dashboard_kpis(scenario):
     # --------------------------------------------------------
     # Roads
     # --------------------------------------------------------
+
     roads_affected = np.nan
     roads_closed = np.nan
     mean_vc = np.nan
 
     if roads is not None and not roads.empty:
 
-        # ----------------------------------------------------
         # Roads affected
-        # ----------------------------------------------------
         if "affected_pct" in roads.columns:
 
             affected = pd.to_numeric(
@@ -439,9 +440,7 @@ def get_dashboard_kpis(scenario):
                 (~access.eq("passable")).sum()
             )
 
-        # ----------------------------------------------------
         # Roads closed
-        # ----------------------------------------------------
         if "passability" in roads.columns:
 
             passability = pd.to_numeric(
@@ -453,9 +452,7 @@ def get_dashboard_kpis(scenario):
                 passability.eq(0).sum()
             )
 
-        # ----------------------------------------------------
-        # Mean FINAL V/C
-        # ----------------------------------------------------
+        # Mean final V/C
         if "final_vc_ratio" in roads.columns:
 
             vc_values = pd.to_numeric(
@@ -478,42 +475,31 @@ def get_dashboard_kpis(scenario):
                 )
 
     # --------------------------------------------------------
-    # FACILITIES AFFECTED
+    # Facilities affected
     # --------------------------------------------------------
+
     facilities_affected = np.nan
 
     if (
         facilities is not None
         and not facilities.empty
-        and "operationally_affected" in facilities.columns
+        and "operationally_affected"
+        in facilities.columns
     ):
 
-        operational = facilities[
-            "operationally_affected"
-        ]
+        operational = pd.to_numeric(
+            facilities["operationally_affected"],
+            errors="coerce"
+        ).fillna(0)
 
-        # Handle both boolean and numeric frozen outputs
-        if operational.dtype == bool:
-
-            facilities_affected = int(
-                operational.sum()
-            )
-
-        else:
-
-            operational = pd.to_numeric(
-                operational,
-                errors="coerce"
-            ).fillna(0)
-
-            facilities_affected = int(
-                operational.gt(0).sum()
-            )
+        facilities_affected = int(
+            operational.gt(0).sum()
+        )
 
     # --------------------------------------------------------
     # CBD population metrics
-    # Read from the frozen model.
     # --------------------------------------------------------
+
     population_exposed = find_metric_in_model(
         scenario,
         [
@@ -561,12 +547,14 @@ def get_dashboard_kpis(scenario):
     # --------------------------------------------------------
     # Emergency response
     # --------------------------------------------------------
+
     mean_response = first_value(
         pd.DataFrame([kpi]),
         ["mean_response_time_min"]
     )
 
     if np.isnan(safe_float(mean_response)):
+
         mean_response = first_value(
             pd.DataFrame([situation]),
             ["mean_response_time_min"]
@@ -575,6 +563,7 @@ def get_dashboard_kpis(scenario):
     # --------------------------------------------------------
     # Return
     # --------------------------------------------------------
+
     return {
         "flood_impact": flood_impact,
         "roads_affected": roads_affected,
