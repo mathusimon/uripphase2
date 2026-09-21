@@ -554,6 +554,38 @@ def get_flood_array(scenario):
 
     return None
 
+def flood_diagnostic(scenario):
+    array = get_flood_array(scenario)
+
+    if array is None:
+        return {
+            "scenario": scenario,
+            "found": False,
+        }
+
+    array = np.asarray(array, dtype=float)
+    finite = np.isfinite(array)
+
+    if not finite.any():
+        return {
+            "scenario": scenario,
+            "found": True,
+            "shape": array.shape,
+            "finite_cells": 0,
+        }
+
+    return {
+        "scenario": scenario,
+        "found": True,
+        "shape": array.shape,
+        "finite_cells": int(finite.sum()),
+        "minimum": float(np.nanmin(array)),
+        "maximum": float(np.nanmax(array)),
+        "mean": float(np.nanmean(array)),
+        "sum": float(np.nansum(array)),
+        "sample": array[finite][:10].round(6).tolist(),
+    }
+
 
 # ============================================================
 # DASHBOARD KPIs
@@ -1616,9 +1648,76 @@ with st.container():
     ctrl_cols = st.columns([1.3, 1.3, 1.6, 1.8])
 
     with ctrl_cols[0]:
-        scenario = st.selectbox("Rainfall scenario", SCENARIOS, index=0)
+        scenario = st.selectbox(
+            "Rainfall scenario",
+            SCENARIOS,
+            index=0,
+        )
 
     rainfall = SCENARIO_RAINFALL[scenario]
+
+        with st.expander("Flood raster diagnostic"):
+        diagnostics = []
+
+        for scenario_name in SCENARIOS:
+            diagnostic_array = get_flood_array(
+                scenario_name
+            )
+
+            if diagnostic_array is None:
+                diagnostics.append(
+                    {
+                        "scenario": scenario_name,
+                        "found": False,
+                    }
+                )
+                continue
+
+            diagnostic_array = np.asarray(
+                diagnostic_array,
+                dtype=float,
+            )
+
+            finite = np.isfinite(
+                diagnostic_array
+            )
+
+            if not finite.any():
+                diagnostics.append(
+                    {
+                        "scenario": scenario_name,
+                        "found": True,
+                        "shape": diagnostic_array.shape,
+                        "finite_cells": 0,
+                    }
+                )
+                continue
+
+            diagnostics.append(
+                {
+                    "scenario": scenario_name,
+                    "found": True,
+                    "shape": diagnostic_array.shape,
+                    "finite_cells": int(finite.sum()),
+                    "minimum": float(
+                        np.nanmin(diagnostic_array)
+                    ),
+                    "maximum": float(
+                        np.nanmax(diagnostic_array)
+                    ),
+                    "mean": float(
+                        np.nanmean(diagnostic_array)
+                    ),
+                    "sum": float(
+                        np.nansum(diagnostic_array)
+                    ),
+                }
+            )
+
+        st.dataframe(
+            pd.DataFrame(diagnostics),
+            use_container_width=True,
+        )
 
     with ctrl_cols[1]:
         map_mode = st.radio(
