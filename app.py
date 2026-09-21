@@ -1656,7 +1656,7 @@ with st.container():
 
     rainfall = SCENARIO_RAINFALL[scenario]
 
-        with st.expander("Flood raster diagnostic"):
+    with st.expander("Flood raster diagnostic"):
         diagnostics = []
 
         for scenario_name in SCENARIOS:
