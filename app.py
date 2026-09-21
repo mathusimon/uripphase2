@@ -401,18 +401,79 @@ def get_incident_flood(scenario):
     return gpd.GeoDataFrame()
 
 
+def resolve_model_scenario(scenario):
+    """
+    Convert the dashboard rainfall label to the corresponding
+    scenario key stored in the frozen model.
+    """
+    dashboard_scenario = str(scenario).strip()
+
+    aliases = {
+        "Normal": [
+            "Normal",
+        ],
+        "Moderate Rainfall": [
+            "Moderate Rainfall",
+            "Moderate",
+        ],
+        "Heavy Rainfall": [
+            "Heavy Rainfall",
+            "Heavy",
+        ],
+        "Severe Rainfall": [
+            "Severe Rainfall",
+            "Severe",
+        ],
+    }
+
+    candidates = aliases.get(
+        dashboard_scenario,
+        [dashboard_scenario],
+    )
+
+    flood = MODEL.get("flood", {})
+
+    if isinstance(flood, dict):
+        available_keys = {
+            str(key).strip()
+            for key in flood.keys()
+        }
+
+        for candidate in candidates:
+            if candidate in available_keys:
+                return candidate
+
+    return dashboard_scenario
+
+
 def get_flood_array(scenario):
-    flood = MODEL["flood"]
+    """
+    Retrieve the flood raster for the selected rainfall scenario.
+    """
+    flood = MODEL.get("flood", {})
+
     if not isinstance(flood, dict):
         return None
 
-    value = flood.get(scenario)
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
+
+    value = flood.get(model_scenario)
+
     if isinstance(value, np.ndarray):
         return value
 
     if isinstance(value, dict):
-        for key in ["flood_raster", "flood", "array", "impact", "flood_impact"]:
+        for key in [
+            "flood_raster",
+            "flood",
+            "array",
+            "impact",
+            "flood_impact",
+        ]:
             candidate = value.get(key)
+
             if isinstance(candidate, np.ndarray):
                 return candidate
 
