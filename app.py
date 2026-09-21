@@ -397,48 +397,73 @@ def get_dashboard_kpis(scenario):
         flood_impact = first_value(pd.DataFrame([situation]), ["mean_incident_flood_impact"])
 
     # --------------------------------------------------------
-    # Roads
-    # --------------------------------------------------------
-    roads_affected = np.nan
-    roads_closed = np.nan
-    mean_vc = np.nan
+# Roads
+# --------------------------------------------------------
+roads_affected = np.nan
+roads_closed = np.nan
+mean_vc = np.nan
 
-    if len(roads):
-        if "affected_pct" in roads.columns:
-            affected = pd.to_numeric(roads["affected_pct"], errors="coerce")
-            roads_affected = (affected > 0).sum()
-        elif "access_status" in roads.columns:
-            roads_affected = roads["access_status"].astype(str).str.lower().ne("passable").sum()
+if roads is not None and not roads.empty:
 
-        if "passability" in roads.columns:
-            roads_closed = pd.to_numeric(roads["passability"], errors="coerce").eq(0).sum()
+    # -------------------------------
+    # Roads affected
+    # -------------------------------
+    if "affected_pct" in roads.columns:
 
-        if "final_vc_ratio" in roads.columns:
+        affected = pd.to_numeric(
+            roads["affected_pct"],
+            errors="coerce"
+        )
 
-    vc_values = pd.to_numeric(
-        roads["final_vc_ratio"],
-        errors="coerce"
-    )
+        roads_affected = int(
+            (affected.fillna(0) > 0).sum()
+        )
 
-    # Remove invalid values only.
-    vc_values = vc_values.replace(
-        [np.inf, -np.inf],
-        np.nan
-    ).dropna()
+    elif "access_status" in roads.columns:
 
-    if not vc_values.empty:
-        mean_vc = float(vc_values.mean())
-    else:
-        mean_vc = np.nan
+        access = (
+            roads["access_status"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
 
-    st.write(
-    "DEBUG V/C:",
-    mean_vc,
-    "valid values:",
-    len(vc_values) if "vc_values" in locals() else 0,
-    "traffic columns:",
-    list(roads.columns)
-)
+        roads_affected = int(
+            (~access.eq("passable")).sum()
+        )
+
+    # -------------------------------
+    # Roads closed
+    # -------------------------------
+    if "passability" in roads.columns:
+
+        passability = pd.to_numeric(
+            roads["passability"],
+            errors="coerce"
+        )
+
+        roads_closed = int(
+            passability.eq(0).sum()
+        )
+
+    # -------------------------------
+    # Mean FINAL V/C
+    # -------------------------------
+    if "final_vc_ratio" in roads.columns:
+
+        vc_values = pd.to_numeric(
+            roads["final_vc_ratio"],
+            errors="coerce"
+        )
+
+        vc_values = (
+            vc_values
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+        )
+
+        if not vc_values.empty:
+            mean_vc = float(vc_values.mean())
 
     # --------------------------------------------------------
     # Facilities affected
