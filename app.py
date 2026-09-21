@@ -1358,7 +1358,7 @@ route_rows = ROUTES_ALTERNATIVES[
         ) == route_rank
     )
 ]
-    if len(route_rows):
+if len(route_rows):
             add_route(
                 fmap,
                 route_rows.iloc[0],
