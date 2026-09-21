@@ -61,10 +61,10 @@ ROAD_COLORS = {
 }
 
 FLOOD_CLASS_COLORS = {
-    "Low": "#2ca25f",
-    "Moderate": "#fdae6b",
-    "High": "#e34a33",
-    "Very High": "#7f0000",
+    "Low": "#dbeafe",        # pale blue
+    "Moderate": "#93c5fd",   # medium blue
+    "High": "#3b82f6",       # strong blue
+    "Very High": "#1d4ed8",  # deep blue
 }
 
 EXPECTED_SECTIONS = [
@@ -546,9 +546,9 @@ def add_flood_raster(fmap, scenario):
 
         # Transparent RGBA flood overlay.
         rgba = np.zeros((*normalized.shape, 4), dtype=np.uint8)
-        rgba[:, :, 0] = 220
-        rgba[:, :, 1] = 40
-        rgba[:, :, 2] = 40
+        rgba[:, :, 0] = 120
+        rgba[:, :, 1] = 180
+        rgba[:, :, 2] = 230
 
         alpha = (normalized * 190).astype(np.uint8)
         alpha[~finite] = 0
@@ -624,11 +624,16 @@ def add_roads_layer(fmap, roads):
 
 def add_facilities_layer(fmap, facilities, recommended_facility_id=None):
     if facilities is None or len(facilities) == 0:
-        return
+        return None
 
     facilities = prepare_gdf(facilities)
     if len(facilities) == 0:
-        return
+        return None
+
+    facility_layer = folium.FeatureGroup(
+        name="Facilities",
+        show=True,
+    )
 
     for _, row in facilities.iterrows():
         geometry = row.geometry
@@ -655,11 +660,11 @@ def add_facilities_layer(fmap, facilities, recommended_facility_id=None):
         )
 
         if is_recommended:
-            color, radius, fill_opacity = "#00ffff", 11, 1.0
+            color, radius, fill_opacity = "#00d9ff", 11, 1.0
         elif bool(operationally_affected):
-            color, radius, fill_opacity = "#e34a33", 6, 0.85
+            color, radius, fill_opacity = "#ef4444", 6, 0.85
         else:
-            color, radius, fill_opacity = "#3388ff", 5, 0.75
+            color, radius, fill_opacity = "#2563eb", 5, 0.75
 
         if is_recommended:
             status_text = "Recommended"
@@ -687,7 +692,10 @@ def add_facilities_layer(fmap, facilities, recommended_facility_id=None):
             weight=2,
             popup=folium.Popup(popup_html, max_width=320),
             tooltip=facility_name,
-        ).add_to(fmap)
+        ).add_to(facility_layer)
+
+    facility_layer.add_to(fmap)
+    return facility_layer
 
 
 # ============================================================
@@ -696,9 +704,16 @@ def add_facilities_layer(fmap, facilities, recommended_facility_id=None):
 
 def add_incidents_layer(fmap, incidents, selected_incident):
     if incidents is None or len(incidents) == 0:
-        return
+        return None
 
     incidents = prepare_gdf(incidents)
+    if len(incidents) == 0:
+        return None
+
+    incident_layer = folium.FeatureGroup(
+        name="Incidents",
+        show=True,
+    )
 
     for _, row in incidents.iterrows():
         geometry = row.geometry
@@ -712,7 +727,8 @@ def add_incidents_layer(fmap, incidents, selected_incident):
 
         incident_id = str(row.get("incident_id", ""))
         selected = incident_id == str(selected_incident)
-        color = "#ff0000" if selected else "#ffcc00"
+
+        color = "#f59e0b" if selected else "#fbbf24"
         radius = 10 if selected else 6
 
         folium.CircleMarker(
@@ -725,7 +741,10 @@ def add_incidents_layer(fmap, incidents, selected_incident):
             weight=2,
             tooltip=incident_id,
             popup=incident_id,
-        ).add_to(fmap)
+        ).add_to(incident_layer)
+
+    incident_layer.add_to(fmap)
+    return incident_layer
 
 
 # ============================================================
@@ -799,8 +818,14 @@ def build_map(scenario, map_mode, incident_id):
 
     recommended_facility_id = report.get("recommended_facility_id", None) if len(report) else None
 
-    add_facilities_layer(fmap, facilities, recommended_facility_id)
-    add_incidents_layer(fmap, incidents, incident_id)
+    facility_layer = add_facilities_layer(fmap, facilities, recommended_facility_id)
+    incident_layer = add_incidents_layer(fmap, incidents, incident_id)
+
+    # Keep the layers in the layer control
+    if facility_layer is not None:
+        facility_layer.add_to(fmap)
+    if incident_layer is not None:
+        incident_layer.add_to(fmap)
 
     # Selected incident flood point
     incident_flood = get_incident_flood(scenario)
