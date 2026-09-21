@@ -392,124 +392,189 @@ def get_dashboard_kpis(scenario):
     # --------------------------------------------------------
     # Flood impact
     # --------------------------------------------------------
-    flood_impact = first_value(pd.DataFrame([kpi]), ["mean_flood_impact"])
+    flood_impact = first_value(
+        pd.DataFrame([kpi]),
+        ["mean_flood_impact"]
+    )
+
     if np.isnan(safe_float(flood_impact)):
-        flood_impact = first_value(pd.DataFrame([situation]), ["mean_incident_flood_impact"])
+        flood_impact = first_value(
+            pd.DataFrame([situation]),
+            ["mean_incident_flood_impact"]
+        )
 
     # --------------------------------------------------------
-# Roads
-# --------------------------------------------------------
-roads_affected = np.nan
-roads_closed = np.nan
-mean_vc = np.nan
+    # Roads
+    # --------------------------------------------------------
+    roads_affected = np.nan
+    roads_closed = np.nan
+    mean_vc = np.nan
 
-if roads is not None and not roads.empty:
+    if roads is not None and not roads.empty:
 
-    # -------------------------------
-    # Roads affected
-    # -------------------------------
-    if "affected_pct" in roads.columns:
+        # ----------------------------------------------------
+        # Roads affected
+        # ----------------------------------------------------
+        if "affected_pct" in roads.columns:
 
-        affected = pd.to_numeric(
-            roads["affected_pct"],
-            errors="coerce"
-        )
+            affected = pd.to_numeric(
+                roads["affected_pct"],
+                errors="coerce"
+            )
 
-        roads_affected = int(
-            (affected.fillna(0) > 0).sum()
-        )
+            roads_affected = int(
+                (affected.fillna(0) > 0).sum()
+            )
 
-    elif "access_status" in roads.columns:
+        elif "access_status" in roads.columns:
 
-        access = (
-            roads["access_status"]
-            .astype(str)
-            .str.strip()
-            .str.lower()
-        )
+            access = (
+                roads["access_status"]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+            )
 
-        roads_affected = int(
-            (~access.eq("passable")).sum()
-        )
+            roads_affected = int(
+                (~access.eq("passable")).sum()
+            )
 
-    # -------------------------------
-    # Roads closed
-    # -------------------------------
-    if "passability" in roads.columns:
+        # ----------------------------------------------------
+        # Roads closed
+        # ----------------------------------------------------
+        if "passability" in roads.columns:
 
-        passability = pd.to_numeric(
-            roads["passability"],
-            errors="coerce"
-        )
+            passability = pd.to_numeric(
+                roads["passability"],
+                errors="coerce"
+            )
 
-        roads_closed = int(
-            passability.eq(0).sum()
-        )
+            roads_closed = int(
+                passability.eq(0).sum()
+            )
 
-    # -------------------------------
-    # Mean FINAL V/C
-    # -------------------------------
-    if "final_vc_ratio" in roads.columns:
+        # ----------------------------------------------------
+        # Mean FINAL V/C
+        # ----------------------------------------------------
+        if "final_vc_ratio" in roads.columns:
 
-        vc_values = pd.to_numeric(
-            roads["final_vc_ratio"],
-            errors="coerce"
-        )
+            vc_values = pd.to_numeric(
+                roads["final_vc_ratio"],
+                errors="coerce"
+            )
 
-        vc_values = (
-            vc_values
-            .replace([np.inf, -np.inf], np.nan)
-            .dropna()
-        )
+            vc_values = (
+                vc_values
+                .replace(
+                    [np.inf, -np.inf],
+                    np.nan
+                )
+                .dropna()
+            )
 
-        if not vc_values.empty:
-            mean_vc = float(vc_values.mean())
+            if not vc_values.empty:
+                mean_vc = float(
+                    vc_values.mean()
+                )
 
     # --------------------------------------------------------
-    # Facilities affected
+    # FACILITIES AFFECTED
     # --------------------------------------------------------
     facilities_affected = np.nan
 
-    if len(facilities) and "operationally_affected" in facilities.columns:
-        values = facilities["operationally_affected"]
-        if values.dtype == bool:
-            facilities_affected = int(values.sum())
-        else:
+    if (
+        facilities is not None
+        and not facilities.empty
+        and "operationally_affected" in facilities.columns
+    ):
+
+        operational = facilities[
+            "operationally_affected"
+        ]
+
+        # Handle both boolean and numeric frozen outputs
+        if operational.dtype == bool:
+
             facilities_affected = int(
-                pd.to_numeric(values, errors="coerce").fillna(0).gt(0).sum()
+                operational.sum()
+            )
+
+        else:
+
+            operational = pd.to_numeric(
+                operational,
+                errors="coerce"
+            ).fillna(0)
+
+            facilities_affected = int(
+                operational.gt(0).sum()
             )
 
     # --------------------------------------------------------
-    # CBD population metrics (read from the frozen model, not
-    # recalculated in Streamlit).
+    # CBD population metrics
+    # Read from the frozen model.
     # --------------------------------------------------------
     population_exposed = find_metric_in_model(
         scenario,
-        ["population_exposed", "flood_exposed_population", "exposed_population"],
-        preferred_sections=["summary", "population"],
+        [
+            "population_exposed",
+            "flood_exposed_population",
+            "exposed_population"
+        ],
+        preferred_sections=[
+            "summary",
+            "population"
+        ],
     )
 
     access_disrupted = find_metric_in_model(
         scenario,
-        ["access_disrupted_population", "access_disrupted", "population_access_disrupted"],
-        preferred_sections=["summary", "population"],
+        [
+            "access_disrupted_population",
+            "access_disrupted",
+            "population_access_disrupted"
+        ],
+        preferred_sections=[
+            "summary",
+            "population"
+        ],
     )
 
     priority_population = find_metric_in_model(
-        scenario, ["priority_population"], preferred_sections=["summary", "population"],
+        scenario,
+        ["priority_population"],
+        preferred_sections=[
+            "summary",
+            "population"
+        ],
     )
 
     high_priority = find_metric_in_model(
-        scenario, ["high_priority_population"], preferred_sections=["summary", "population"],
+        scenario,
+        ["high_priority_population"],
+        preferred_sections=[
+            "summary",
+            "population"
+        ],
     )
 
     # --------------------------------------------------------
     # Emergency response
     # --------------------------------------------------------
-    mean_response = first_value(pd.DataFrame([kpi]), ["mean_response_time_min"])
-    if np.isnan(safe_float(mean_response)):
-        mean_response = first_value(pd.DataFrame([situation]), ["mean_response_time_min"])
+    mean_response = first_value(
+        pd.DataFrame([kpi]),
+        ["mean_response_time_min"]
+    )
 
+    if np.isnan(safe_float(mean_response)):
+        mean_response = first_value(
+            pd.DataFrame([situation]),
+            ["mean_response_time_min"]
+        )
+
+    # --------------------------------------------------------
+    # Return
+    # --------------------------------------------------------
     return {
         "flood_impact": flood_impact,
         "roads_affected": roads_affected,
