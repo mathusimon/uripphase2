@@ -187,18 +187,6 @@ def resolve_model_scenario(scenario):
     """
     Translate the dashboard scenario label to the exact scenario key
     used inside the frozen model.
-
-    Dashboard labels:
-        Normal
-        Moderate Rainfall
-        Heavy Rainfall
-        Severe Rainfall
-
-    Frozen model may use:
-        Normal
-        Moderate
-        Heavy
-        Severe
     """
 
     scenario = str(scenario).strip()
@@ -226,9 +214,6 @@ def resolve_model_scenario(scenario):
         [scenario],
     )
 
-    # --------------------------------------------------------
-    # First: scenario dictionaries
-    # --------------------------------------------------------
     for section in [
         "traffic",
         "facilities",
@@ -249,9 +234,6 @@ def resolve_model_scenario(scenario):
             if candidate in keys:
                 return candidate
 
-    # --------------------------------------------------------
-    # Second: authoritative emergency tables
-    # --------------------------------------------------------
     emergency = MODEL.get(
         "emergency",
         {},
@@ -291,9 +273,6 @@ def resolve_model_scenario(scenario):
 
 
 def scenario_rows(df, scenario):
-    """
-    Return only rows belonging to the requested dashboard scenario.
-    """
     if df is None or len(df) == 0:
         return df
 
@@ -316,9 +295,6 @@ def scenario_rows(df, scenario):
 
 
 def first_value(df, columns, default=np.nan):
-    """
-    Return the first non-null value from the first matching column.
-    """
     if df is None or len(df) == 0:
         return default
 
@@ -600,18 +576,6 @@ def get_population_metric(
     scenario,
     metric,
 ):
-    """
-    Read the CBD-wide population metric from the frozen model.
-
-    This deliberately avoids the previous recursive search because
-    the frozen model contains both:
-
-      1. CBD-wide population outputs
-      2. incident-level population tables
-
-    The dashboard must use the CBD-wide frozen outputs.
-    """
-
     population = MODEL.get(
         "population",
         {}
@@ -627,10 +591,6 @@ def get_population_metric(
         scenario
     )
 
-    # --------------------------------------------------------
-    # Known authoritative population objects in the frozen
-    # analytical package.
-    # --------------------------------------------------------
     preferred_objects = {
         "population_exposed": [
             "authoritative_population",
@@ -659,9 +619,6 @@ def get_population_metric(
         [],
     )
 
-    # --------------------------------------------------------
-    # First look in specifically named authoritative objects.
-    # --------------------------------------------------------
     for object_name in candidate_names:
         obj = population.get(
             object_name
@@ -716,10 +673,6 @@ def get_population_metric(
                 if len(values):
                     return values.iloc[0]
 
-    # --------------------------------------------------------
-    # If the authoritative object is a scenario dictionary,
-    # inspect that exact scenario.
-    # --------------------------------------------------------
     for object_name in candidate_names:
         obj = population.get(
             object_name
@@ -795,13 +748,6 @@ def get_population_metric(
 # ============================================================
 
 def get_dashboard_kpis(scenario):
-    """
-    Read dashboard KPIs exclusively from the frozen model.
-
-    No flood, traffic, routing, facility or population analysis is
-    recalculated here.
-    """
-
     kpi = get_emergency_kpi(
         scenario
     )
@@ -818,9 +764,6 @@ def get_dashboard_kpis(scenario):
         scenario
     )
 
-    # --------------------------------------------------------
-    # Flood impact
-    # --------------------------------------------------------
     flood_impact = first_value(
         pd.DataFrame([kpi]),
         ["mean_flood_impact"],
@@ -834,9 +777,6 @@ def get_dashboard_kpis(scenario):
             ["mean_incident_flood_impact"],
         )
 
-    # --------------------------------------------------------
-    # Roads
-    # --------------------------------------------------------
     roads_affected = np.nan
     roads_closed = np.nan
     mean_vc = np.nan
@@ -878,13 +818,6 @@ def get_dashboard_kpis(scenario):
                 errors="coerce",
             ).mean()
 
-    # --------------------------------------------------------
-    # Facilities
-    #
-    # IMPORTANT:
-    # "Facilities affected" means operationally affected,
-    # matching the frozen model's emergency interpretation.
-    # --------------------------------------------------------
     facilities_affected = np.nan
 
     if (
@@ -913,12 +846,6 @@ def get_dashboard_kpis(scenario):
                 .sum()
             )
 
-    # --------------------------------------------------------
-    # CBD-wide population metrics
-    #
-    # These are read from the frozen model's authoritative
-    # population outputs.
-    # --------------------------------------------------------
     population_exposed = get_population_metric(
         scenario,
         "population_exposed",
@@ -939,9 +866,6 @@ def get_dashboard_kpis(scenario):
         "high_priority_population",
     )
 
-    # --------------------------------------------------------
-    # Emergency response
-    # --------------------------------------------------------
     mean_response = first_value(
         pd.DataFrame([kpi]),
         ["mean_response_time_min"],
@@ -1040,7 +964,6 @@ def add_flood_raster(fmap, scenario):
         else:
             normalized = np.zeros_like(array, dtype=float)
 
-        # Transparent RGBA flood overlay.
         rgba = np.zeros((*normalized.shape, 4), dtype=np.uint8)
         rgba[:, :, 0] = 220
         rgba[:, :, 1] = 40
@@ -1342,23 +1265,23 @@ def build_map(scenario, map_mode, incident_id):
 
         model_scenario = resolve_model_scenario(scenario)
 
-route_rows = ROUTES_ALTERNATIVES[
-    (ROUTES_ALTERNATIVES["scenario"].astype(str).str.strip() == model_scenario)
-    & (ROUTES_ALTERNATIVES["incident_id"].astype(str) == str(incident_id))
-    & (
-        pd.to_numeric(
-            ROUTES_ALTERNATIVES["facility_rank"],
-            errors="coerce"
-        ) == facility_rank
-    )
-    & (
-        pd.to_numeric(
-            ROUTES_ALTERNATIVES["route_rank"],
-            errors="coerce"
-        ) == route_rank
-    )
-]
-if len(route_rows):
+        route_rows = ROUTES_ALTERNATIVES[
+            (ROUTES_ALTERNATIVES["scenario"].astype(str).str.strip() == model_scenario)
+            & (ROUTES_ALTERNATIVES["incident_id"].astype(str) == str(incident_id))
+            & (
+                pd.to_numeric(
+                    ROUTES_ALTERNATIVES["facility_rank"],
+                    errors="coerce"
+                ) == facility_rank
+            )
+            & (
+                pd.to_numeric(
+                    ROUTES_ALTERNATIVES["route_rank"],
+                    errors="coerce"
+                ) == route_rank
+            )
+        ]
+        if len(route_rows):
             add_route(
                 fmap,
                 route_rows.iloc[0],
@@ -1768,25 +1691,24 @@ with st.container():
 
     model_scenario = resolve_model_scenario(scenario)
 
-incident_ids = sorted(
-    INCIDENT_REPORT[
-        INCIDENT_REPORT["scenario"].astype(str).str.strip() == model_scenario
-    ]["incident_id"]
-    .dropna()
-    .astype(str)
-    .unique()
-    .tolist()
-)
-
-if not incident_ids:
     incident_ids = sorted(
-        INCIDENT_REPORT["incident_id"]
+        INCIDENT_REPORT[
+            INCIDENT_REPORT["scenario"].astype(str).str.strip() == model_scenario
+        ]["incident_id"]
         .dropna()
         .astype(str)
         .unique()
         .tolist()
     )
-    
+
+    if not incident_ids:
+        incident_ids = sorted(
+            INCIDENT_REPORT["incident_id"]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
 
     with ctrl_cols[2]:
         incident_id = st.selectbox("Emergency incident", incident_ids, index=0)
