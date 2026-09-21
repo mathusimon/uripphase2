@@ -157,39 +157,44 @@ def fmt_pct(value):
 
 def render_html(html, target=None):
     """
-    st.markdown(unsafe_allow_html=True) still runs input through a
-    Markdown/CommonMark parser first. Two things break raw HTML built
-    from indented f-strings:
-      1. Leading whitespace on lines (4+ spaces) can be read as an
-         indented code block.
-      2. Any line that ends up blank or whitespace-only (e.g. a
-         conditional placeholder like {"" if not x else "badge"} sitting
-         alone on its own line) terminates the HTML block early, so
-         everything after it gets re-parsed as plain text/code.
-    Dedent to fix (1) and drop any resulting blank lines to fix (2).
+    Render HTML safely without changing the dashboard UI.
     """
     dedented = textwrap.dedent(html).strip()
-    collapsed = "\n".join(line for line in dedented.splitlines() if line.strip() != "")
-    (target or st).markdown(collapsed, unsafe_allow_html=True)
+    collapsed = "\n".join(
+        line for line in dedented.splitlines()
+        if line.strip() != ""
+    )
+    (target or st).markdown(
+        collapsed,
+        unsafe_allow_html=True
+    )
 
 
 def get_df(obj):
     """Return a DataFrame / GeoDataFrame if obj is one, otherwise None."""
-    return obj if isinstance(obj, (pd.DataFrame, gpd.GeoDataFrame)) else None
+    return (
+        obj
+        if isinstance(obj, (pd.DataFrame, gpd.GeoDataFrame))
+        else None
+    )
 
+
+# ============================================================
+# FROZEN MODEL SCENARIO RESOLUTION
+# ============================================================
 
 def resolve_model_scenario(scenario):
     """
-    Translate the dashboard scenario label to the scenario key used
-    inside the frozen model.
+    Translate the dashboard scenario label to the exact scenario key
+    used inside the frozen model.
 
-    The UI keeps the descriptive labels:
+    Dashboard labels:
         Normal
         Moderate Rainfall
         Heavy Rainfall
         Severe Rainfall
 
-    The frozen model may store:
+    Frozen model may use:
         Normal
         Moderate
         Heavy
@@ -199,152 +204,134 @@ def resolve_model_scenario(scenario):
     scenario = str(scenario).strip()
 
     aliases = {
-        "Normal": ["Normal"],
-        "Moderate Rainfall": ["Moderate Rainfall", "Moderate"],
-        "Heavy Rainfall": ["Heavy Rainfall", "Heavy"],
-        "Severe Rainfall": ["Severe Rainfall", "Severe"],
+        "Normal": [
+            "Normal",
+        ],
+        "Moderate Rainfall": [
+            "Moderate Rainfall",
+            "Moderate",
+        ],
+        "Heavy Rainfall": [
+            "Heavy Rainfall",
+            "Heavy",
+        ],
+        "Severe Rainfall": [
+            "Severe Rainfall",
+            "Severe",
+        ],
     }
 
     candidates = aliases.get(
         scenario,
-        [scenario]
+        [scenario],
     )
 
-    # First inspect dictionary-based scenario keys.
-    for section in ["traffic", "facilities", "flood", "roads"]:
+    # --------------------------------------------------------
+    # First: scenario dictionaries
+    # --------------------------------------------------------
+    for section in [
+        "traffic",
+        "facilities",
+        "flood",
+        "roads",
+    ]:
         obj = MODEL.get(section)
 
-        if isinstance(obj, dict):
-            keys = {str(k).strip() for k in obj.keys()}
+        if not isinstance(obj, dict):
+            continue
+
+        keys = {
+            str(k).strip()
+            for k in obj.keys()
+        }
+
+        for candidate in candidates:
+            if candidate in keys:
+                return candidate
+
+    # --------------------------------------------------------
+    # Second: authoritative emergency tables
+    # --------------------------------------------------------
+    emergency = MODEL.get(
+        "emergency",
+        {},
+    )
+
+    if isinstance(emergency, dict):
+        for table_name in [
+            "kpis",
+            "situation_report",
+            "incident_report",
+            "incident_comparison",
+        ]:
+            table = emergency.get(table_name)
+
+            if not isinstance(
+                table,
+                (pd.DataFrame, gpd.GeoDataFrame),
+            ):
+                continue
+
+            if "scenario" not in table.columns:
+                continue
+
+            values = set(
+                table["scenario"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .unique()
+            )
 
             for candidate in candidates:
-                if candidate in keys:
+                if candidate in values:
                     return candidate
 
-    # Then inspect authoritative emergency tables.
-    emergency = MODEL.get("emergency", {})
-
-    for table_name in [
-        "kpis",
-        "situation_report",
-        "incident_report",
-        "incident_comparison",
-    ]:
-        table = emergency.get(table_name)
-
-        if isinstance(table, (pd.DataFrame, gpd.GeoDataFrame)):
-            if "scenario" in table.columns:
-                values = set(
-                    table["scenario"]
-                    .dropna()
-                    .astype(str)
-                    .str.strip()
-                    .unique()
-                )
-
-                for candidate in candidates:
-                    if candidate in values:
-                        return candidate
-
-    # Fall back to the original value.
     return scenario
 
 
 def scenario_rows(df, scenario):
-    """Return rows belonging to a dashboard scenario."""
+    """
+    Return only rows belonging to the requested dashboard scenario.
+    """
     if df is None or len(df) == 0:
         return df
 
     if "scenario" not in df.columns:
         return df.iloc[0:0].copy()
 
-    model_scenario = resolve_model_scenario(scenario)
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
 
-    values = df["scenario"].astype(str).str.strip()
+    values = (
+        df["scenario"]
+        .astype(str)
+        .str.strip()
+    )
 
-    return df[values == model_scenario].copy()
+    return df[
+        values == model_scenario
+    ].copy()
 
 
 def first_value(df, columns, default=np.nan):
-    """Return the first non-null value from a list of possible columns."""
+    """
+    Return the first non-null value from the first matching column.
+    """
     if df is None or len(df) == 0:
         return default
+
     for column in columns:
-        if column in df.columns:
-            values = df[column].dropna()
-            if len(values):
-                return values.iloc[0]
-    return default
-
-
-def sum_value(df, columns, default=np.nan):
-    """Sum the first matching numeric column."""
-    if df is None or len(df) == 0:
-        return default
-    for column in columns:
-        if column in df.columns:
-            values = pd.to_numeric(df[column], errors="coerce")
-            if values.notna().any():
-                return values.sum()
-    return default
-
-
-def recursive_dataframes(obj, prefix=""):
-    """Recursively discover DataFrames and GeoDataFrames (read-only)."""
-    if isinstance(obj, (pd.DataFrame, gpd.GeoDataFrame)):
-        return [(prefix, obj)]
-
-    found = []
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            child_prefix = f"{prefix}.{key}" if prefix else str(key)
-            found.extend(recursive_dataframes(value, child_prefix))
-    return found
-
-
-def find_metric_in_model(scenario, preferred_columns, preferred_sections=None, aggregation="first"):
-    """
-    Search frozen tables for a scenario-specific metric.
-    This is a read-only extraction helper; it does not create or
-    recalculate analytical outputs.
-    """
-    preferred_sections = preferred_sections or []
-    candidates = []
-
-    # Preferred sections first, then everything else.
-    for section in preferred_sections:
-        if section in MODEL:
-            candidates.extend(recursive_dataframes(MODEL[section], section))
-
-    for section, obj in MODEL.items():
-        if section not in preferred_sections:
-            candidates.extend(recursive_dataframes(obj, section))
-
-    for _, df in candidates:
-        if "scenario" not in df.columns:
+        if column not in df.columns:
             continue
 
-        sdf = scenario_rows(df, scenario)
-        if len(sdf) == 0:
-            continue
+        values = df[column].dropna()
 
-        for column in preferred_columns:
-            if column not in sdf.columns:
-                continue
-
-            values = pd.to_numeric(sdf[column], errors="coerce").dropna()
-            if len(values) == 0:
-                continue
-
-            if aggregation == "sum":
-                return values.sum()
-            if aggregation == "mean":
-                return values.mean()
-            if aggregation == "max":
-                return values.max()
+        if len(values):
             return values.iloc[0]
 
-    return np.nan
+    return default
 
 
 # ============================================================
@@ -369,60 +356,127 @@ ROUTES_RECOMMENDED = MODEL["routes"]["recommended"].copy()
 # ============================================================
 
 def get_emergency_kpi(scenario):
-    rows = scenario_rows(EMERGENCY_KPIS, scenario)
-    return rows.iloc[0] if len(rows) else pd.Series(dtype=object)
-
-
-def get_situation(scenario):
-    rows = scenario_rows(SITUATION_REPORT, scenario)
-    return rows.iloc[0] if len(rows) else pd.Series(dtype=object)
-
-
-def get_incident_report(scenario, incident_id):
-    model_scenario = resolve_model_scenario(scenario)
-
-    rows = INCIDENT_REPORT[
-        (INCIDENT_REPORT["scenario"].astype(str).str.strip() == model_scenario)
-        & (INCIDENT_REPORT["incident_id"].astype(str) == str(incident_id))
-    ]
-
-    return rows.iloc[0] if len(rows) else pd.Series(dtype=object)
-
-
-def get_facility_options(scenario, incident_id):
-    model_scenario = resolve_model_scenario(scenario)
-
-    rows = FACILITY_OPTIONS[
-        (FACILITY_OPTIONS["scenario"].astype(str).str.strip() == model_scenario)
-        & (FACILITY_OPTIONS["incident_id"].astype(str) == str(incident_id))
-    ]
+    rows = scenario_rows(
+        EMERGENCY_KPIS,
+        scenario,
+    )
 
     return (
-        rows.sort_values(["facility_rank"])
+        rows.iloc[0]
         if len(rows)
-        else rows
+        else pd.Series(dtype=object)
     )
 
 
-def get_route_options(scenario, incident_id, facility_rank):
-    model_scenario = resolve_model_scenario(scenario)
+def get_situation(scenario):
+    rows = scenario_rows(
+        SITUATION_REPORT,
+        scenario,
+    )
 
-    rows = ROUTES_ALTERNATIVES[
-        (ROUTES_ALTERNATIVES["scenario"].astype(str).str.strip() == model_scenario)
-        & (ROUTES_ALTERNATIVES["incident_id"].astype(str) == str(incident_id))
-        & (
-            pd.to_numeric(
-                ROUTES_ALTERNATIVES["facility_rank"],
-                errors="coerce"
-            ) == safe_int(facility_rank, 0)
+    return (
+        rows.iloc[0]
+        if len(rows)
+        else pd.Series(dtype=object)
+    )
+
+
+def get_incident_report(scenario, incident_id):
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
+
+    rows = INCIDENT_REPORT[
+        (
+            INCIDENT_REPORT["scenario"]
+            .astype(str)
+            .str.strip()
+            == model_scenario
+        )
+        &
+        (
+            INCIDENT_REPORT["incident_id"]
+            .astype(str)
+            == str(incident_id)
         )
     ]
 
     return (
-        rows.sort_values(["route_rank"])
+        rows.iloc[0]
         if len(rows)
-        else rows
+        else pd.Series(dtype=object)
     )
+
+
+def get_facility_options(scenario, incident_id):
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
+
+    rows = FACILITY_OPTIONS[
+        (
+            FACILITY_OPTIONS["scenario"]
+            .astype(str)
+            .str.strip()
+            == model_scenario
+        )
+        &
+        (
+            FACILITY_OPTIONS["incident_id"]
+            .astype(str)
+            == str(incident_id)
+        )
+    ]
+
+    if len(rows):
+        return rows.sort_values(
+            ["facility_rank"]
+        )
+
+    return rows
+
+
+def get_route_options(
+    scenario,
+    incident_id,
+    facility_rank,
+):
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
+
+    rows = ROUTES_ALTERNATIVES[
+        (
+            ROUTES_ALTERNATIVES["scenario"]
+            .astype(str)
+            .str.strip()
+            == model_scenario
+        )
+        &
+        (
+            ROUTES_ALTERNATIVES["incident_id"]
+            .astype(str)
+            == str(incident_id)
+        )
+        &
+        (
+            pd.to_numeric(
+                ROUTES_ALTERNATIVES["facility_rank"],
+                errors="coerce",
+            )
+            == safe_int(
+                facility_rank,
+                0,
+            )
+        )
+    ]
+
+    if len(rows):
+        return rows.sort_values(
+            ["route_rank"]
+        )
+
+    return rows
 
 
 # ============================================================
@@ -430,20 +484,34 @@ def get_route_options(scenario, incident_id, facility_rank):
 # ============================================================
 
 def get_roads(scenario):
-    model_scenario = resolve_model_scenario(scenario)
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
 
-    roads = MODEL["traffic"].get(model_scenario)
+    roads = MODEL["traffic"].get(
+        model_scenario
+    )
 
     if roads is None:
-        roads = MODEL["roads"].get(model_scenario)
+        roads = MODEL["roads"].get(
+            model_scenario
+        )
 
-    return roads.copy() if roads is not None else gpd.GeoDataFrame()
+    return (
+        roads.copy()
+        if roads is not None
+        else gpd.GeoDataFrame()
+    )
 
 
 def get_facilities(scenario):
-    model_scenario = resolve_model_scenario(scenario)
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
 
-    facilities = MODEL["facilities"].get(model_scenario)
+    facilities = MODEL["facilities"].get(
+        model_scenario
+    )
 
     return (
         facilities.copy()
@@ -454,19 +522,34 @@ def get_facilities(scenario):
 
 def get_incidents():
     incidents = MODEL["incidents"]
+
     if isinstance(incidents, dict):
         points = incidents.get("points")
-        if isinstance(points, (pd.DataFrame, gpd.GeoDataFrame)):
+
+        if isinstance(
+            points,
+            (pd.DataFrame, gpd.GeoDataFrame),
+        ):
             return points.copy()
+
     return gpd.GeoDataFrame()
 
 
 def get_incident_flood(scenario):
     incidents = MODEL["incidents"]
+
     if isinstance(incidents, dict):
         flood = incidents.get("flood")
-        if isinstance(flood, (pd.DataFrame, gpd.GeoDataFrame)):
-            return scenario_rows(flood, scenario)
+
+        if isinstance(
+            flood,
+            (pd.DataFrame, gpd.GeoDataFrame),
+        ):
+            return scenario_rows(
+                flood,
+                scenario,
+            )
+
     return gpd.GeoDataFrame()
 
 
@@ -476,11 +559,18 @@ def get_flood_array(scenario):
     if not isinstance(flood, dict):
         return None
 
-    model_scenario = resolve_model_scenario(scenario)
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
 
-    value = flood.get(model_scenario)
+    value = flood.get(
+        model_scenario
+    )
 
-    if isinstance(value, np.ndarray):
+    if isinstance(
+        value,
+        np.ndarray,
+    ):
         return value
 
     if isinstance(value, dict):
@@ -493,10 +583,211 @@ def get_flood_array(scenario):
         ]:
             candidate = value.get(key)
 
-            if isinstance(candidate, np.ndarray):
+            if isinstance(
+                candidate,
+                np.ndarray,
+            ):
                 return candidate
 
     return None
+
+
+# ============================================================
+# AUTHORITATIVE CBD POPULATION EXTRACTION
+# ============================================================
+
+def get_population_metric(
+    scenario,
+    metric,
+):
+    """
+    Read the CBD-wide population metric from the frozen model.
+
+    This deliberately avoids the previous recursive search because
+    the frozen model contains both:
+
+      1. CBD-wide population outputs
+      2. incident-level population tables
+
+    The dashboard must use the CBD-wide frozen outputs.
+    """
+
+    population = MODEL.get(
+        "population",
+        {}
+    )
+
+    if not isinstance(
+        population,
+        dict,
+    ):
+        return np.nan
+
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
+
+    # --------------------------------------------------------
+    # Known authoritative population objects in the frozen
+    # analytical package.
+    # --------------------------------------------------------
+    preferred_objects = {
+        "population_exposed": [
+            "authoritative_population",
+            "population_exposure_results",
+            "state_population",
+        ],
+        "access_disrupted": [
+            "population_access_results",
+            "authoritative_population",
+            "state_population",
+        ],
+        "priority_population": [
+            "population_priority_results",
+            "authoritative_population",
+            "state_population",
+        ],
+        "high_priority_population": [
+            "population_priority_results",
+            "authoritative_population",
+            "state_population",
+        ],
+    }
+
+    candidate_names = preferred_objects.get(
+        metric,
+        [],
+    )
+
+    # --------------------------------------------------------
+    # First look in specifically named authoritative objects.
+    # --------------------------------------------------------
+    for object_name in candidate_names:
+        obj = population.get(
+            object_name
+        )
+
+        if isinstance(
+            obj,
+            (pd.DataFrame, gpd.GeoDataFrame),
+        ):
+            df = obj.copy()
+
+            if "scenario" in df.columns:
+                df = scenario_rows(
+                    df,
+                    scenario,
+                )
+
+            if len(df) == 0:
+                continue
+
+            metric_aliases = {
+                "population_exposed": [
+                    "population_exposed",
+                    "flood_exposed_population",
+                    "exposed_population",
+                ],
+                "access_disrupted": [
+                    "access_disrupted_population",
+                    "access_disrupted",
+                    "population_access_disrupted",
+                ],
+                "priority_population": [
+                    "priority_population",
+                ],
+                "high_priority_population": [
+                    "high_priority_population",
+                ],
+            }
+
+            for column in metric_aliases.get(
+                metric,
+                [],
+            ):
+                if column not in df.columns:
+                    continue
+
+                values = pd.to_numeric(
+                    df[column],
+                    errors="coerce",
+                ).dropna()
+
+                if len(values):
+                    return values.iloc[0]
+
+    # --------------------------------------------------------
+    # If the authoritative object is a scenario dictionary,
+    # inspect that exact scenario.
+    # --------------------------------------------------------
+    for object_name in candidate_names:
+        obj = population.get(
+            object_name
+        )
+
+        if not isinstance(
+            obj,
+            dict,
+        ):
+            continue
+
+        scenario_obj = None
+
+        for key in [
+            model_scenario,
+            scenario,
+        ]:
+            if key in obj:
+                scenario_obj = obj[key]
+                break
+
+        if scenario_obj is None:
+            continue
+
+        if isinstance(
+            scenario_obj,
+            dict,
+        ):
+            aliases = {
+                "population_exposed": [
+                    "population_exposed",
+                    "flood_exposed_population",
+                    "exposed_population",
+                ],
+                "access_disrupted": [
+                    "access_disrupted_population",
+                    "access_disrupted",
+                    "population_access_disrupted",
+                ],
+                "priority_population": [
+                    "priority_population",
+                ],
+                "high_priority_population": [
+                    "high_priority_population",
+                ],
+            }
+
+            for key in aliases.get(
+                metric,
+                [],
+            ):
+                if key in scenario_obj:
+                    value = safe_float(
+                        scenario_obj[key]
+                    )
+
+                    if not np.isnan(value):
+                        return value
+
+        else:
+            value = safe_float(
+                scenario_obj
+            )
+
+            if not np.isnan(value):
+                return value
+
+    return np.nan
 
 
 # ============================================================
@@ -504,17 +795,44 @@ def get_flood_array(scenario):
 # ============================================================
 
 def get_dashboard_kpis(scenario):
-    kpi = get_emergency_kpi(scenario)
-    situation = get_situation(scenario)
-    roads = get_roads(scenario)
-    facilities = get_facilities(scenario)
+    """
+    Read dashboard KPIs exclusively from the frozen model.
+
+    No flood, traffic, routing, facility or population analysis is
+    recalculated here.
+    """
+
+    kpi = get_emergency_kpi(
+        scenario
+    )
+
+    situation = get_situation(
+        scenario
+    )
+
+    roads = get_roads(
+        scenario
+    )
+
+    facilities = get_facilities(
+        scenario
+    )
 
     # --------------------------------------------------------
     # Flood impact
     # --------------------------------------------------------
-    flood_impact = first_value(pd.DataFrame([kpi]), ["mean_flood_impact"])
-    if np.isnan(safe_float(flood_impact)):
-        flood_impact = first_value(pd.DataFrame([situation]), ["mean_incident_flood_impact"])
+    flood_impact = first_value(
+        pd.DataFrame([kpi]),
+        ["mean_flood_impact"],
+    )
+
+    if np.isnan(
+        safe_float(flood_impact)
+    ):
+        flood_impact = first_value(
+            pd.DataFrame([situation]),
+            ["mean_incident_flood_impact"],
+        )
 
     # --------------------------------------------------------
     # Roads
@@ -524,62 +842,118 @@ def get_dashboard_kpis(scenario):
     mean_vc = np.nan
 
     if len(roads):
+
         if "affected_pct" in roads.columns:
-            affected = pd.to_numeric(roads["affected_pct"], errors="coerce")
-            roads_affected = (affected > 0).sum()
+            affected = pd.to_numeric(
+                roads["affected_pct"],
+                errors="coerce",
+            )
+
+            roads_affected = int(
+                affected.gt(0).sum()
+            )
+
         elif "access_status" in roads.columns:
-            roads_affected = roads["access_status"].astype(str).str.lower().ne("passable").sum()
+            roads_affected = int(
+                roads["access_status"]
+                .astype(str)
+                .str.lower()
+                .ne("passable")
+                .sum()
+            )
 
         if "passability" in roads.columns:
-            roads_closed = pd.to_numeric(roads["passability"], errors="coerce").eq(0).sum()
+            passability = pd.to_numeric(
+                roads["passability"],
+                errors="coerce",
+            )
+
+            roads_closed = int(
+                passability.eq(0).sum()
+            )
 
         if "final_vc_ratio" in roads.columns:
-            mean_vc = pd.to_numeric(roads["final_vc_ratio"], errors="coerce").mean()
+            mean_vc = pd.to_numeric(
+                roads["final_vc_ratio"],
+                errors="coerce",
+            ).mean()
 
     # --------------------------------------------------------
-    # Facilities affected
+    # Facilities
+    #
+    # IMPORTANT:
+    # "Facilities affected" means operationally affected,
+    # matching the frozen model's emergency interpretation.
     # --------------------------------------------------------
     facilities_affected = np.nan
 
-    if len(facilities) and "operationally_affected" in facilities.columns:
-        values = facilities["operationally_affected"]
-        if values.dtype == bool:
-            facilities_affected = int(values.sum())
+    if (
+        len(facilities)
+        and "operationally_affected"
+        in facilities.columns
+    ):
+        values = facilities[
+            "operationally_affected"
+        ]
+
+        if pd.api.types.is_bool_dtype(
+            values
+        ):
+            facilities_affected = int(
+                values.sum()
+            )
         else:
             facilities_affected = int(
-                pd.to_numeric(values, errors="coerce").fillna(0).gt(0).sum()
+                pd.to_numeric(
+                    values,
+                    errors="coerce",
+                )
+                .fillna(0)
+                .gt(0)
+                .sum()
             )
 
     # --------------------------------------------------------
-    # CBD population metrics (read from the frozen model, not
-    # recalculated in Streamlit).
+    # CBD-wide population metrics
+    #
+    # These are read from the frozen model's authoritative
+    # population outputs.
     # --------------------------------------------------------
-    population_exposed = find_metric_in_model(
+    population_exposed = get_population_metric(
         scenario,
-        ["population_exposed", "flood_exposed_population", "exposed_population"],
-        preferred_sections=["summary", "population"],
+        "population_exposed",
     )
 
-    access_disrupted = find_metric_in_model(
+    access_disrupted = get_population_metric(
         scenario,
-        ["access_disrupted_population", "access_disrupted", "population_access_disrupted"],
-        preferred_sections=["summary", "population"],
+        "access_disrupted",
     )
 
-    priority_population = find_metric_in_model(
-        scenario, ["priority_population"], preferred_sections=["summary", "population"],
+    priority_population = get_population_metric(
+        scenario,
+        "priority_population",
     )
 
-    high_priority = find_metric_in_model(
-        scenario, ["high_priority_population"], preferred_sections=["summary", "population"],
+    high_priority = get_population_metric(
+        scenario,
+        "high_priority_population",
     )
 
     # --------------------------------------------------------
     # Emergency response
     # --------------------------------------------------------
-    mean_response = first_value(pd.DataFrame([kpi]), ["mean_response_time_min"])
-    if np.isnan(safe_float(mean_response)):
-        mean_response = first_value(pd.DataFrame([situation]), ["mean_response_time_min"])
+    mean_response = first_value(
+        pd.DataFrame([kpi]),
+        ["mean_response_time_min"],
+    )
+
+    if np.isnan(
+        safe_float(mean_response)
+    ):
+        mean_response = first_value(
+            pd.DataFrame([situation]),
+            ["mean_response_time_min"],
+        )
 
     return {
         "flood_impact": flood_impact,
