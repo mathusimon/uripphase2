@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 from PIL import Image
 from streamlit_folium import st_folium
+from matplotlib import colormaps
 
 # ============================================================
 # PAGE CONFIG
@@ -67,13 +68,6 @@ FLOOD_CLASS_COLORS = {
     "Very High": "#1d4ed8",  # deep blue
 }
 
-# One solid colour per rainfall scenario.
-SCENARIO_FLOOD_COLORS = {
-    "Normal": "#bfdbfe",            # light blue
-    "Moderate Rainfall": "#60a5fa", # medium-light blue
-    "Heavy Rainfall": "#2563eb",    # strong blue
-    "Severe Rainfall": "#1e3a8a",   # dark blue
-}
 
 # Incident marker colours by flood-risk class.
 INCIDENT_MARKER_COLORS = {
@@ -571,13 +565,20 @@ def add_geojson(fmap, gdf, name, style_function, tooltip=None, show=False):
 # ============================================================
 
 def add_flood_raster(fmap, scenario):
+    """
+    Render flood impact as an opaque continuous blue raster.
+
+    Lower values use lighter blue.
+    Higher values use darker blue.
+    NaN/infinite cells remain transparent as nodata.
+    """
     array = get_flood_array(scenario)
 
     if array is None:
         return
 
     try:
-        array = np.asarray(array)
+        array = np.asarray(array, dtype=float)
 
         if array.ndim != 2:
             return
@@ -587,27 +588,46 @@ def add_flood_raster(fmap, scenario):
         if not finite.any():
             return
 
-        hex_colour = SCENARIO_FLOOD_COLORS.get(
-            scenario,
-            "#2563eb",
-        ).lstrip("#")
+        valid_values = array[finite]
+        minimum = np.nanmin(valid_values)
+        maximum = np.nanmax(valid_values)
 
-        red = int(hex_colour[0:2], 16)
-        green = int(hex_colour[2:4], 16)
-        blue = int(hex_colour[4:6], 16)
+        # Normalize flood impact to 0–1.
+        if maximum > minimum:
+            normalized = np.zeros_like(
+                array,
+                dtype=float,
+            )
 
-        rgba = np.zeros(
-            (*array.shape, 4),
-            dtype=np.uint8,
+            normalized[finite] = (
+                (array[finite] - minimum)
+                / (maximum - minimum)
+            )
+        else:
+            normalized = np.zeros_like(
+                array,
+                dtype=float,
+            )
+
+        # Use a blue colour ramp.
+        #
+        # Values are restricted to this portion of the Blues
+        # colourmap so low impacts remain visibly blue instead
+        # of appearing almost white.
+        blue_map = colormaps["viridis"]
+        colors = blue_map(
+            0.25 + normalized * 0.70
         )
 
-        # Apply one solid, opaque colour to all valid flood cells.
-        rgba[:, :, 0] = red
-        rgba[:, :, 1] = green
-        rgba[:, :, 2] = blue
-        rgba[:, :, 3] = 0
+        # Convert RGBA float values from Matplotlib to uint8.
+        rgba = (
+            colors * 255
+        ).astype(np.uint8)
 
-        # Valid cells are completely opaque.
+        # Nodata cells are transparent.
+        rgba[~finite, 3] = 0
+
+        # Valid flood cells are completely opaque.
         rgba[finite, 3] = 255
 
         image = Image.fromarray(
@@ -616,17 +636,23 @@ def add_flood_raster(fmap, scenario):
         )
 
         buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
+        image.save(
+            buffer,
+            format="PNG",
+        )
 
         encoded = base64.b64encode(
             buffer.getvalue()
         ).decode("utf-8")
 
         folium.raster_layers.ImageOverlay(
-            image="data:image/png;base64," + encoded,
+            image=(
+                "data:image/png;base64,"
+                + encoded
+            ),
             bounds=FLOOD_BOUNDS,
             opacity=1.0,
-            name=f"{scenario} flood extent",
+            name=f"{scenario} flood impact",
             interactive=True,
             cross_origin=False,
             zindex=1,
