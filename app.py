@@ -69,10 +69,10 @@ FLOOD_CLASS_COLORS = {
 
 # One solid colour per rainfall scenario.
 SCENARIO_FLOOD_COLORS = {
-    "Normal": "#bfdbfe",
-    "Moderate Rainfall": "#60a5fa",
-    "Heavy Rainfall": "#2563eb",
-    "Severe Rainfall": "#1e3a8a",
+    "Normal": "#bfdbfe",            # light blue
+    "Moderate Rainfall": "#60a5fa", # medium-light blue
+    "Heavy Rainfall": "#2563eb",    # strong blue
+    "Severe Rainfall": "#1e3a8a",   # dark blue
 }
 
 # Incident marker colours by flood-risk class.
@@ -590,9 +590,7 @@ def add_flood_raster(fmap, scenario):
         hex_colour = SCENARIO_FLOOD_COLORS.get(
             scenario,
             "#2563eb",
-        )
-
-        hex_colour = hex_colour.lstrip("#")
+        ).lstrip("#")
 
         red = int(hex_colour[0:2], 16)
         green = int(hex_colour[2:4], 16)
@@ -603,14 +601,14 @@ def add_flood_raster(fmap, scenario):
             dtype=np.uint8,
         )
 
-        # Every valid flood pixel receives the same solid colour.
+        # Apply one solid, opaque colour to all valid flood cells.
         rgba[:, :, 0] = red
         rgba[:, :, 1] = green
         rgba[:, :, 2] = blue
         rgba[:, :, 3] = 0
 
-        # Transparent nodata cells; opaque valid flood cells.
-        rgba[finite, 3] = 190
+        # Valid cells are completely opaque.
+        rgba[finite, 3] = 255
 
         image = Image.fromarray(
             rgba,
@@ -627,7 +625,7 @@ def add_flood_raster(fmap, scenario):
         folium.raster_layers.ImageOverlay(
             image="data:image/png;base64," + encoded,
             bounds=FLOOD_BOUNDS,
-            opacity=0.75,
+            opacity=1.0,
             name=f"{scenario} flood extent",
             interactive=True,
             cross_origin=False,
