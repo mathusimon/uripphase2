@@ -2894,15 +2894,13 @@ with right_col:
         )
 
         incident_html += (
-
-            '<div style="margin: 0.6rem 0;">'
-
-            f'{pill('
-            f'"' + flood_class + " flood risk", '
-            f'{flood_class_kind}'
-            f')}'
-
-            "</div>"
+    '<div style="margin: 0.6rem 0;">'
+    + pill(
+        f"{flood_class} flood risk",
+        flood_class_kind
+    )
+    + "</div>"
+)
 
             '<div style="font-size:0.82rem; '
             'color:#9fb2c9; line-height:1.9;">'
