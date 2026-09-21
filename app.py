@@ -107,26 +107,28 @@ def load_model():
 
 try:
     MODEL, MODEL_FILE = load_model()
+
     st.write("DEBUG — MODEL FILE:", MODEL_FILE)
 
-st.write("DEBUG — traffic keys:")
-st.write(list(MODEL.get("traffic", {}).keys()))
+    st.write("DEBUG — traffic keys:")
+    st.write(list(MODEL.get("traffic", {}).keys()))
 
-st.write("DEBUG — facilities keys:")
-st.write(list(MODEL.get("facilities", {}).keys()))
+    st.write("DEBUG — facilities keys:")
+    st.write(list(MODEL.get("facilities", {}).keys()))
 
-st.write("DEBUG — flood keys:")
-st.write(list(MODEL.get("flood", {}).keys()))
+    st.write("DEBUG — flood keys:")
+    st.write(list(MODEL.get("flood", {}).keys()))
 
-kpis = MODEL.get("emergency", {}).get("kpis")
-if isinstance(kpis, pd.DataFrame):
-    st.write("DEBUG — KPI scenarios:")
-    st.write(kpis["scenario"].unique().tolist())
+    kpis = MODEL.get("emergency", {}).get("kpis")
+    if isinstance(kpis, pd.DataFrame):
+        st.write("DEBUG — KPI scenarios:")
+        st.write(kpis["scenario"].unique().tolist())
 
-situation = MODEL.get("emergency", {}).get("situation_report")
-if isinstance(situation, pd.DataFrame):
-    st.write("DEBUG — situation scenarios:")
-    st.write(situation["scenario"].unique().tolist())
+    situation = MODEL.get("emergency", {}).get("situation_report")
+    if isinstance(situation, pd.DataFrame):
+        st.write("DEBUG — situation scenarios:")
+        st.write(situation["scenario"].unique().tolist())
+
 except Exception as e:
     st.error("Unable to load the frozen URIP model.")
     st.exception(e)
