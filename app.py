@@ -379,29 +379,75 @@ def get_situation(scenario):
 
 def get_incident_report(scenario, incident_id):
     rows = INCIDENT_REPORT[
-        (INCIDENT_REPORT["scenario"] == scenario)
-        & (INCIDENT_REPORT["incident_id"] == incident_id)
+        (INCIDENT_REPORT["scenario"].astype(str)
+         == str(resolve_model_scenario(scenario)))
+        & (
+            INCIDENT_REPORT["incident_id"].astype(str)
+            == str(incident_id)
+        )
     ]
-    # incident_report is the authoritative one-row-per-incident/scenario
-    # recommendation table.
-    return rows.iloc[0] if len(rows) else pd.Series(dtype=object)
+
+    return (
+        rows.iloc[0]
+        if len(rows)
+        else pd.Series(dtype=object)
+    )
 
 
 def get_facility_options(scenario, incident_id):
+
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
+
     rows = FACILITY_OPTIONS[
-        (FACILITY_OPTIONS["scenario"] == scenario)
-        & (FACILITY_OPTIONS["incident_id"] == incident_id)
+        (
+            FACILITY_OPTIONS["scenario"].astype(str)
+            == str(model_scenario)
+        )
+        & (
+            FACILITY_OPTIONS["incident_id"].astype(str)
+            == str(incident_id)
+        )
     ]
-    return rows.sort_values(["facility_rank"]) if len(rows) else rows
+
+    return (
+        rows.sort_values(["facility_rank"])
+        if len(rows)
+        else rows
+    )
 
 
-def get_route_options(scenario, incident_id, facility_rank):
+def get_route_options(
+    scenario,
+    incident_id,
+    facility_rank
+):
+
+    model_scenario = resolve_model_scenario(
+        scenario
+    )
+
     rows = ROUTES_ALTERNATIVES[
-        (ROUTES_ALTERNATIVES["scenario"] == scenario)
-        & (ROUTES_ALTERNATIVES["incident_id"] == incident_id)
-        & (ROUTES_ALTERNATIVES["facility_rank"] == facility_rank)
+        (
+            ROUTES_ALTERNATIVES["scenario"].astype(str)
+            == str(model_scenario)
+        )
+        & (
+            ROUTES_ALTERNATIVES["incident_id"].astype(str)
+            == str(incident_id)
+        )
+        & (
+            ROUTES_ALTERNATIVES["facility_rank"]
+            == facility_rank
+        )
     ]
-    return rows.sort_values(["route_rank"]) if len(rows) else rows
+
+    return (
+        rows.sort_values(["route_rank"])
+        if len(rows)
+        else rows
+    )
 
 
 # ============================================================
@@ -572,27 +618,33 @@ def get_dashboard_kpis(scenario):
                     vc_values.mean()
                 )
 
-    # --------------------------------------------------------
+       # --------------------------------------------------------
     # Facilities affected
     # --------------------------------------------------------
 
     facilities_affected = np.nan
 
-    if (
-        facilities is not None
-        and not facilities.empty
-        and "operationally_affected"
-        in facilities.columns
-    ):
+    if facilities is not None and not facilities.empty:
 
-        operational = pd.to_numeric(
-            facilities["operationally_affected"],
-            errors="coerce"
-        ).fillna(0)
+        if "operationally_affected" in facilities.columns:
 
-        facilities_affected = int(
-            operational.gt(0).sum()
-        )
+            affected_flags = facilities[
+                "operationally_affected"
+            ].apply(is_true_value)
+
+            facilities_affected = int(
+                affected_flags.sum()
+            )
+
+        elif "response_disrupted" in facilities.columns:
+
+            affected_flags = facilities[
+                "response_disrupted"
+            ].apply(is_true_value)
+
+            facilities_affected = int(
+                affected_flags.sum()
+            )
     # --------------------------------------------------------
     # Emergency population metrics
     # --------------------------------------------------------
@@ -703,47 +755,103 @@ def add_geojson(fmap, gdf, name, style_function, tooltip=None, show=False):
 # ============================================================
 
 def add_flood_raster(fmap, scenario):
+    """
+    Display the frozen-model flood impact as a classified
+    continuous raster.
+
+    The analytical values are not recalculated. Only the
+    visualization is classified for readability.
+    """
+
     array = get_flood_array(scenario)
+
     if array is None:
         return
 
     try:
-        array = np.asarray(array)
+        array = np.asarray(array, dtype=float)
+
         if array.ndim != 2:
             return
 
         finite = np.isfinite(array)
+
         if not finite.any():
             return
 
-        minimum = np.nanmin(array)
-        maximum = np.nanmax(array)
+        valid = array[finite]
+
+        minimum = float(np.nanmin(valid))
+        maximum = float(np.nanmax(valid))
+
+        # ----------------------------------------------------
+        # Create normalized flood-impact surface
+        # ----------------------------------------------------
 
         if maximum > minimum:
             normalized = (array - minimum) / (maximum - minimum)
         else:
             normalized = np.zeros_like(array, dtype=float)
 
-        # Transparent RGBA flood overlay.
-        rgba = np.zeros((*normalized.shape, 4), dtype=np.uint8)
-        rgba[:, :, 0] = 220
-        rgba[:, :, 1] = 40
-        rgba[:, :, 2] = 40
+        normalized = np.clip(normalized, 0, 1)
 
-        alpha = (normalized * 190).astype(np.uint8)
-        alpha[~finite] = 0
-        rgba[:, :, 3] = alpha
+        # ----------------------------------------------------
+        # URIP flood-risk colour ramp
+        #
+        # 0.00 - 0.25 = Low
+        # 0.25 - 0.50 = Moderate
+        # 0.50 - 0.75 = High
+        # 0.75 - 1.00 = Very High
+        # ----------------------------------------------------
+
+        rgba = np.zeros((*normalized.shape, 4), dtype=np.uint8)
+
+        # Transparent background
+        rgba[:, :, 3] = 0
+
+        low = finite & (normalized < 0.25)
+        moderate = finite & (normalized >= 0.25) & (normalized < 0.50)
+        high = finite & (normalized >= 0.50) & (normalized < 0.75)
+        very_high = finite & (normalized >= 0.75)
+
+        # Low — green
+        rgba[low, 0] = 34
+        rgba[low, 1] = 197
+        rgba[low, 2] = 139
+        rgba[low, 3] = 85
+
+        # Moderate — yellow/orange
+        rgba[moderate, 0] = 242
+        rgba[moderate, 1] = 169
+        rgba[moderate, 2] = 59
+        rgba[moderate, 3] = 105
+
+        # High — red/orange
+        rgba[high, 0] = 229
+        rgba[high, 1] = 72
+        rgba[high, 2] = 77
+        rgba[high, 3] = 135
+
+        # Very High — dark red
+        rgba[very_high, 0] = 127
+        rgba[very_high, 1] = 0
+        rgba[very_high, 2] = 0
+        rgba[very_high, 3] = 165
 
         image = Image.fromarray(rgba, mode="RGBA")
+
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
-        encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        encoded = base64.b64encode(
+            buffer.getvalue()
+        ).decode("utf-8")
 
         folium.raster_layers.ImageOverlay(
             image="data:image/png;base64," + encoded,
             bounds=FLOOD_BOUNDS,
-            opacity=0.55,
-            name=f"{scenario} flood impact",
+            opacity=0.75,
+            name=f"Flood Risk — {scenario}",
             interactive=True,
             cross_origin=False,
             zindex=1,
@@ -755,63 +863,231 @@ def add_flood_raster(fmap, scenario):
 
 
 # ============================================================
-# ROAD MAP
+# ROAD / TRAFFIC MAP
 # ============================================================
 
 def add_roads_layer(fmap, roads):
+    """
+    Visualize the frozen traffic model using final V/C ratio.
+
+    V/C ratio:
+        < 0.60       Free flow
+        0.60–0.80    Moderate
+        0.80–1.00    Heavy
+        > 1.00       Oversaturated
+
+    Closed roads remain dark red regardless of V/C ratio.
+    """
+
     if roads is None or len(roads) == 0:
         return
 
     roads = prepare_gdf(roads)
+
     if len(roads) == 0:
         return
 
-    for status, color in ROAD_COLORS.items():
-        if "passability" not in roads.columns:
-            subset = roads.iloc[0:0]
+    # --------------------------------------------------------
+    # Ensure numeric traffic fields
+    # --------------------------------------------------------
 
-        elif status == "Passable":
-            subset = roads[pd.to_numeric(roads["passability"], errors="coerce") >= 0.999]
+    if "final_vc_ratio" in roads.columns:
+        roads["__vc"] = pd.to_numeric(
+            roads["final_vc_ratio"],
+            errors="coerce"
+        )
+    else:
+        roads["__vc"] = np.nan
 
-        elif status == "Closed":
-            subset = roads[pd.to_numeric(roads["passability"], errors="coerce") <= 0.001]
+    if "passability" in roads.columns:
+        roads["__passability"] = pd.to_numeric(
+            roads["passability"],
+            errors="coerce"
+        )
+    else:
+        roads["__passability"] = np.nan
 
-        elif status in ("Minor Disruption", "Severe Disruption"):
-            if "access_status" in roads.columns:
-                subset = roads[roads["access_status"].astype(str).eq(status)]
-            else:
-                subset = roads.iloc[0:0]
+    # --------------------------------------------------------
+    # V/C categories
+    # --------------------------------------------------------
 
-        else:
-            subset = roads.iloc[0:0]
+    categories = [
+        (
+            "Free Flow — V/C < 0.60",
+            roads[
+                (roads["__vc"] < 0.60)
+                & roads["__vc"].notna()
+                & (roads["__passability"] > 0)
+            ],
+            "#22c58b",
+        ),
+        (
+            "Moderate — V/C 0.60–0.80",
+            roads[
+                (roads["__vc"] >= 0.60)
+                & (roads["__vc"] < 0.80)
+                & roads["__vc"].notna()
+                & (roads["__passability"] > 0)
+            ],
+            "#f2c94c",
+        ),
+        (
+            "Heavy — V/C 0.80–1.00",
+            roads[
+                (roads["__vc"] >= 0.80)
+                & (roads["__vc"] <= 1.00)
+                & roads["__vc"].notna()
+                & (roads["__passability"] > 0)
+            ],
+            "#f2994a",
+        ),
+        (
+            "Oversaturated — V/C > 1.00",
+            roads[
+                (roads["__vc"] > 1.00)
+                & roads["__vc"].notna()
+                & (roads["__passability"] > 0)
+            ],
+            "#e5484d",
+        ),
+        (
+            "Closed / Impassable",
+            roads[
+                roads["__passability"].notna()
+                & (roads["__passability"] <= 0.001)
+            ],
+            "#7f0000",
+        ),
+        (
+            "Traffic Data Unavailable",
+            roads[
+                roads["__vc"].isna()
+                & (
+                    roads["__passability"].isna()
+                    | (roads["__passability"] > 0)
+                )
+            ],
+            "#64748b",
+        ),
+    ]
 
-        if len(subset) == 0:
+    # --------------------------------------------------------
+    # Add each traffic class as its own map layer
+    # --------------------------------------------------------
+
+    for name, subset, color in categories:
+
+        if subset.empty:
             continue
+
+        tooltip_fields = []
+
+        if "road_id" in subset.columns:
+            tooltip_fields.append("road_id")
+
+        if "final_vc_ratio" in subset.columns:
+            tooltip_fields.append("final_vc_ratio")
+
+        if "final_volume_vph" in subset.columns:
+            tooltip_fields.append("final_volume_vph")
+
+        if "capacity_vph" in subset.columns:
+            tooltip_fields.append("capacity_vph")
+
+        if "passability" in subset.columns:
+            tooltip_fields.append("passability")
+
+        aliases = {
+            "road_id": "Road",
+            "final_vc_ratio": "Final V/C",
+            "final_volume_vph": "Final volume (veh/hr)",
+            "capacity_vph": "Capacity (veh/hr)",
+            "passability": "Passability",
+        }
 
         folium.GeoJson(
             subset.to_json(),
-            name=f"Roads — {status}",
-            style_function=lambda feature, color=color: {
-                "color": color, "weight": 2.5, "opacity": 0.85,
+            name=f"Traffic — {name}",
+            style_function=lambda feature, c=color: {
+                "color": c,
+                "weight": 4,
+                "opacity": 0.9,
             },
-            show=(status != "Passable"),
+            tooltip=(
+                folium.GeoJsonTooltip(
+                    fields=tooltip_fields,
+                    aliases=[
+                        aliases.get(field, field)
+                        for field in tooltip_fields
+                    ],
+                    localize=True,
+                    sticky=False,
+                )
+                if tooltip_fields
+                else None
+            ),
+            show=True,
+            smooth_factor=0.5,
         ).add_to(fmap)
 
+def is_true_value(value):
+    """
+    Safely interpret boolean-like values from the frozen model.
 
+    Prevents:
+        bool("False") == True
+    """
+
+    if isinstance(value, bool):
+        return value
+
+    if value is None or pd.isna(value):
+        return False
+
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return float(value) > 0
+
+    text = str(value).strip().lower()
+
+    return text in {
+        "true",
+        "1",
+        "yes",
+        "y",
+        "affected",
+        "operationally affected",
+        "disrupted",
+    }
 # ============================================================
 # FACILITY MAP
 # ============================================================
 
-def add_facilities_layer(fmap, facilities, recommended_facility_id=None):
+def add_facilities_layer(
+    fmap,
+    facilities,
+    recommended_facility_id=None
+):
     if facilities is None or len(facilities) == 0:
         return
 
     facilities = prepare_gdf(facilities)
+
     if len(facilities) == 0:
         return
 
+    # --------------------------------------------------------
+    # Independent layer
+    # --------------------------------------------------------
+
+    facility_group = folium.FeatureGroup(
+        name="Emergency Facilities",
+        show=True
+    )
+
     for _, row in facilities.iterrows():
+
         geometry = row.geometry
+
         if geometry is None:
             continue
 
@@ -824,36 +1100,85 @@ def add_facilities_layer(fmap, facilities, recommended_facility_id=None):
         except Exception:
             continue
 
-        facility_id = str(row.get("facility_id", ""))
-        facility_name = str(row.get("name", row.get("facility_name", "Facility")))
-        facility_type = str(row.get("facility_type", "Facility"))
-        operationally_affected = row.get("operationally_affected", False)
+        facility_id = str(
+            row.get("facility_id", "")
+        )
+
+        facility_name = str(
+            row.get(
+                "name",
+                row.get(
+                    "facility_name",
+                    "Facility"
+                )
+            )
+        )
+
+        facility_type = str(
+            row.get(
+                "facility_type",
+                "Facility"
+            )
+        )
+
+        affected = is_true_value(
+            row.get("operationally_affected", False)
+        )
+
+        response_disrupted = is_true_value(
+            row.get("response_disrupted", False)
+        )
+
+        physically_affected = is_true_value(
+            row.get("physically_affected", False)
+        )
 
         is_recommended = (
             recommended_facility_id is not None
-            and facility_id == str(recommended_facility_id)
+            and facility_id == str(
+                recommended_facility_id
+            )
         )
 
-        if is_recommended:
-            color, radius, fill_opacity = "#00ffff", 11, 1.0
-        elif bool(operationally_affected):
-            color, radius, fill_opacity = "#e34a33", 6, 0.85
-        else:
-            color, radius, fill_opacity = "#3388ff", 5, 0.75
+        # ----------------------------------------------------
+        # Determine display state
+        # ----------------------------------------------------
 
         if is_recommended:
+            color = "#00ffff"
+            radius = 10
+            fill_opacity = 1.0
             status_text = "Recommended"
-        elif bool(operationally_affected):
-            status_text = "Operationally affected"
+
+        elif affected or response_disrupted:
+            color = "#e5484d"
+            radius = 7
+            fill_opacity = 0.95
+
+            if physically_affected:
+                status_text = "Physically affected"
+            else:
+                status_text = "Response disrupted"
+
         else:
+            color = "#3aa0ff"
+            radius = 5
+            fill_opacity = 0.85
             status_text = "Operational"
 
         popup_html = f"""
-        <div style="font-family:Arial;min-width:220px;">
-            <h4 style="margin-bottom:6px;">{facility_name}</h4>
+        <div style="font-family:Arial;min-width:240px;">
+            <h4 style="margin:0 0 8px 0;">
+                {facility_name}
+            </h4>
+
             <b>Facility ID:</b> {facility_id}<br>
             <b>Type:</b> {facility_type}<br>
-            <b>Status:</b> {status_text}
+            <b>Status:</b> {status_text}<br>
+            <b>Flood impact:</b>
+                {fmt_number(row.get("flood_impact", np.nan), 3)}<br>
+            <b>Response time:</b>
+                {fmt_minutes(row.get("response_time", np.nan))}
         </div>
         """
 
@@ -865,47 +1190,121 @@ def add_facilities_layer(fmap, facilities, recommended_facility_id=None):
             fill_color=color,
             fill_opacity=fill_opacity,
             weight=2,
-            popup=folium.Popup(popup_html, max_width=320),
-            tooltip=facility_name,
-        ).add_to(fmap)
+            popup=folium.Popup(
+                popup_html,
+                max_width=340
+            ),
+            tooltip=(
+                f"{facility_name} — {status_text}"
+            ),
+        ).add_to(facility_group)
+
+    facility_group.add_to(fmap)
 
 
 # ============================================================
 # INCIDENT MAP
 # ============================================================
 
-def add_incidents_layer(fmap, incidents, selected_incident):
+def add_incidents_layer(
+    fmap,
+    incidents,
+    selected_incident
+):
     if incidents is None or len(incidents) == 0:
         return
 
     incidents = prepare_gdf(incidents)
 
+    if len(incidents) == 0:
+        return
+
+    incident_group = folium.FeatureGroup(
+        name="Emergency Incidents",
+        show=True
+    )
+
     for _, row in incidents.iterrows():
+
         geometry = row.geometry
+
         if geometry is None:
             continue
 
         try:
-            lat, lon = geometry.y, geometry.x
+            if geometry.geom_type == "Point":
+                lat, lon = geometry.y, geometry.x
+            else:
+                point = geometry.centroid
+                lat, lon = point.y, point.x
         except Exception:
             continue
 
-        incident_id = str(row.get("incident_id", ""))
-        selected = incident_id == str(selected_incident)
-        color = "#ff0000" if selected else "#ffcc00"
-        radius = 10 if selected else 6
+        incident_id = str(
+            row.get("incident_id", "")
+        )
+
+        selected = (
+            incident_id == str(selected_incident)
+        )
+
+        # Selected incident is visually prominent.
+        if selected:
+            color = "#ffffff"
+            fill_color = "#e5484d"
+            radius = 10
+            weight = 4
+        else:
+            color = "#ffd166"
+            fill_color = "#f2994a"
+            radius = 6
+            weight = 2
+
+        population = row.get(
+            "population",
+            row.get(
+                "population_in_catchment",
+                np.nan
+            )
+        )
+
+        flood_impact = row.get(
+            "flood_impact",
+            np.nan
+        )
+
+        popup_html = f"""
+        <div style="font-family:Arial;min-width:220px;">
+            <h4 style="margin:0 0 8px 0;">
+                Emergency Incident
+            </h4>
+
+            <b>Incident:</b> {incident_id}<br>
+            <b>Population:</b> {fmt_number(population)}<br>
+            <b>Flood impact:</b>
+                {fmt_number(flood_impact, 3)}
+        </div>
+        """
 
         folium.CircleMarker(
             location=[lat, lon],
             radius=radius,
             color=color,
             fill=True,
-            fill_color=color,
+            fill_color=fill_color,
             fill_opacity=0.95,
-            weight=2,
-            tooltip=incident_id,
-            popup=incident_id,
-        ).add_to(fmap)
+            weight=weight,
+            popup=folium.Popup(
+                popup_html,
+                max_width=320
+            ),
+            tooltip=(
+                f"{incident_id}"
+                + (" — SELECTED" if selected else "")
+            ),
+        ).add_to(incident_group)
+
+    incident_group.add_to(fmap)
 
 
 # ============================================================
@@ -961,11 +1360,34 @@ def build_map(scenario, map_mode, incident_id):
         control=True,
     ).add_to(fmap)
 
-    # Flood layer
+        # --------------------------------------------------------
+    # Flood risk
+    # --------------------------------------------------------
+
     add_flood_raster(fmap, scenario)
+
     folium.Rectangle(
-        bounds=FLOOD_BOUNDS, color="#555555", weight=1, fill=False, name="URIP analysis boundary",
+        bounds=FLOOD_BOUNDS,
+        color="#555555",
+        weight=1,
+        fill=False,
+        name="URIP analysis boundary",
     ).add_to(fmap)
+
+    # --------------------------------------------------------
+    # Traffic / congestion
+    # --------------------------------------------------------
+
+    roads = get_roads(scenario)
+
+    if map_mode in (
+        "Flood Scenario",
+        "Emergency Response"
+    ):
+        add_roads_layer(
+            fmap,
+            roads
+        )
 
     # Roads
     roads = get_roads(scenario)
@@ -982,42 +1404,83 @@ def build_map(scenario, map_mode, incident_id):
     add_facilities_layer(fmap, facilities, recommended_facility_id)
     add_incidents_layer(fmap, incidents, incident_id)
 
-    # Selected incident flood point
+        # --------------------------------------------------------
+    # Selected incident flood impact
+    # --------------------------------------------------------
+
     incident_flood = get_incident_flood(scenario)
+
     if len(incident_flood):
+
         selected_flood = prepare_gdf(
-            incident_flood[incident_flood["incident_id"] == incident_id].copy()
+            incident_flood[
+                incident_flood["incident_id"].astype(str)
+                == str(incident_id)
+            ].copy()
         )
 
-        for _, row in selected_flood.iterrows():
-            geometry = row.geometry
-            if geometry is None:
-                continue
+        if len(selected_flood):
 
-            try:
-                lat, lon = geometry.y, geometry.x
-                impact = safe_float(row.get("flood_impact", np.nan))
-                flood_class = str(row.get("flood_class", "Unknown"))
-                color = FLOOD_CLASS_COLORS.get(flood_class, "#555555")
+            flood_incident_group = folium.FeatureGroup(
+                name="Selected Incident Flood Impact",
+                show=True
+            )
 
-                folium.CircleMarker(
-                    location=[lat, lon],
-                    radius=13,
-                    color=color,
-                    fill=True,
-                    fill_color=color,
-                    fill_opacity=0.25,
-                    weight=3,
-                    tooltip=f"{incident_id} — {flood_class}",
-                    popup=(
-                        f"<b>{incident_id}</b><br>"
-                        f"Flood impact: {fmt_number(impact, 3)}<br>"
-                        f"Class: {flood_class}"
-                    ),
-                ).add_to(fmap)
+            for _, row in selected_flood.iterrows():
 
-            except Exception:
-                pass
+                geometry = row.geometry
+
+                if geometry is None:
+                    continue
+
+                try:
+                    lat, lon = geometry.y, geometry.x
+
+                    impact = safe_float(
+                        row.get(
+                            "flood_impact",
+                            np.nan
+                        )
+                    )
+
+                    flood_class = str(
+                        row.get(
+                            "flood_class",
+                            "Unknown"
+                        )
+                    )
+
+                    color = FLOOD_CLASS_COLORS.get(
+                        flood_class,
+                        "#555555"
+                    )
+
+                    folium.CircleMarker(
+                        location=[lat, lon],
+                        radius=13,
+                        color=color,
+                        fill=True,
+                        fill_color=color,
+                        fill_opacity=0.22,
+                        weight=3,
+                        tooltip=(
+                            f"{incident_id} — "
+                            f"{flood_class}"
+                        ),
+                        popup=(
+                            f"<b>{incident_id}</b><br>"
+                            f"Flood impact: "
+                            f"{fmt_number(impact, 3)}<br>"
+                            f"Class: {flood_class}"
+                        ),
+                    ).add_to(
+                        flood_incident_group
+                    )
+
+                except Exception:
+                    pass
+
+            flood_incident_group.add_to(fmap)
 
     # Emergency route
     if map_mode == "Emergency Response" and len(report):
