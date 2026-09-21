@@ -178,13 +178,91 @@ def get_df(obj):
     return obj if isinstance(obj, (pd.DataFrame, gpd.GeoDataFrame)) else None
 
 
+def resolve_model_scenario(scenario):
+    """
+    Translate the dashboard scenario label to the scenario key used
+    inside the frozen model.
+
+    The UI keeps the descriptive labels:
+        Normal
+        Moderate Rainfall
+        Heavy Rainfall
+        Severe Rainfall
+
+    The frozen model may store:
+        Normal
+        Moderate
+        Heavy
+        Severe
+    """
+
+    scenario = str(scenario).strip()
+
+    aliases = {
+        "Normal": ["Normal"],
+        "Moderate Rainfall": ["Moderate Rainfall", "Moderate"],
+        "Heavy Rainfall": ["Heavy Rainfall", "Heavy"],
+        "Severe Rainfall": ["Severe Rainfall", "Severe"],
+    }
+
+    candidates = aliases.get(
+        scenario,
+        [scenario]
+    )
+
+    # First inspect dictionary-based scenario keys.
+    for section in ["traffic", "facilities", "flood", "roads"]:
+        obj = MODEL.get(section)
+
+        if isinstance(obj, dict):
+            keys = {str(k).strip() for k in obj.keys()}
+
+            for candidate in candidates:
+                if candidate in keys:
+                    return candidate
+
+    # Then inspect authoritative emergency tables.
+    emergency = MODEL.get("emergency", {})
+
+    for table_name in [
+        "kpis",
+        "situation_report",
+        "incident_report",
+        "incident_comparison",
+    ]:
+        table = emergency.get(table_name)
+
+        if isinstance(table, (pd.DataFrame, gpd.GeoDataFrame)):
+            if "scenario" in table.columns:
+                values = set(
+                    table["scenario"]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                    .unique()
+                )
+
+                for candidate in candidates:
+                    if candidate in values:
+                        return candidate
+
+    # Fall back to the original value.
+    return scenario
+
+
 def scenario_rows(df, scenario):
-    """Return rows belonging to a scenario."""
+    """Return rows belonging to a dashboard scenario."""
     if df is None or len(df) == 0:
         return df
+
     if "scenario" not in df.columns:
         return df.iloc[0:0].copy()
-    return df[df["scenario"].astype(str) == str(scenario)].copy()
+
+    model_scenario = resolve_model_scenario(scenario)
+
+    values = df["scenario"].astype(str).str.strip()
+
+    return df[values == model_scenario].copy()
 
 
 def first_value(df, columns, default=np.nan):
@@ -301,30 +379,50 @@ def get_situation(scenario):
 
 
 def get_incident_report(scenario, incident_id):
+    model_scenario = resolve_model_scenario(scenario)
+
     rows = INCIDENT_REPORT[
-        (INCIDENT_REPORT["scenario"] == scenario)
-        & (INCIDENT_REPORT["incident_id"] == incident_id)
+        (INCIDENT_REPORT["scenario"].astype(str).str.strip() == model_scenario)
+        & (INCIDENT_REPORT["incident_id"].astype(str) == str(incident_id))
     ]
-    # incident_report is the authoritative one-row-per-incident/scenario
-    # recommendation table.
+
     return rows.iloc[0] if len(rows) else pd.Series(dtype=object)
 
 
 def get_facility_options(scenario, incident_id):
+    model_scenario = resolve_model_scenario(scenario)
+
     rows = FACILITY_OPTIONS[
-        (FACILITY_OPTIONS["scenario"] == scenario)
-        & (FACILITY_OPTIONS["incident_id"] == incident_id)
+        (FACILITY_OPTIONS["scenario"].astype(str).str.strip() == model_scenario)
+        & (FACILITY_OPTIONS["incident_id"].astype(str) == str(incident_id))
     ]
-    return rows.sort_values(["facility_rank"]) if len(rows) else rows
+
+    return (
+        rows.sort_values(["facility_rank"])
+        if len(rows)
+        else rows
+    )
 
 
 def get_route_options(scenario, incident_id, facility_rank):
+    model_scenario = resolve_model_scenario(scenario)
+
     rows = ROUTES_ALTERNATIVES[
-        (ROUTES_ALTERNATIVES["scenario"] == scenario)
-        & (ROUTES_ALTERNATIVES["incident_id"] == incident_id)
-        & (ROUTES_ALTERNATIVES["facility_rank"] == facility_rank)
+        (ROUTES_ALTERNATIVES["scenario"].astype(str).str.strip() == model_scenario)
+        & (ROUTES_ALTERNATIVES["incident_id"].astype(str) == str(incident_id))
+        & (
+            pd.to_numeric(
+                ROUTES_ALTERNATIVES["facility_rank"],
+                errors="coerce"
+            ) == safe_int(facility_rank, 0)
+        )
     ]
-    return rows.sort_values(["route_rank"]) if len(rows) else rows
+
+    return (
+        rows.sort_values(["route_rank"])
+        if len(rows)
+        else rows
+    )
 
 
 # ============================================================
@@ -332,15 +430,26 @@ def get_route_options(scenario, incident_id, facility_rank):
 # ============================================================
 
 def get_roads(scenario):
-    roads = MODEL["traffic"].get(scenario)
+    model_scenario = resolve_model_scenario(scenario)
+
+    roads = MODEL["traffic"].get(model_scenario)
+
     if roads is None:
-        roads = MODEL["roads"].get(scenario)
+        roads = MODEL["roads"].get(model_scenario)
+
     return roads.copy() if roads is not None else gpd.GeoDataFrame()
 
 
 def get_facilities(scenario):
-    facilities = MODEL["facilities"].get(scenario)
-    return facilities.copy() if facilities is not None else gpd.GeoDataFrame()
+    model_scenario = resolve_model_scenario(scenario)
+
+    facilities = MODEL["facilities"].get(model_scenario)
+
+    return (
+        facilities.copy()
+        if facilities is not None
+        else gpd.GeoDataFrame()
+    )
 
 
 def get_incidents():
@@ -363,16 +472,27 @@ def get_incident_flood(scenario):
 
 def get_flood_array(scenario):
     flood = MODEL["flood"]
+
     if not isinstance(flood, dict):
         return None
 
-    value = flood.get(scenario)
+    model_scenario = resolve_model_scenario(scenario)
+
+    value = flood.get(model_scenario)
+
     if isinstance(value, np.ndarray):
         return value
 
     if isinstance(value, dict):
-        for key in ["flood_raster", "flood", "array", "impact", "flood_impact"]:
+        for key in [
+            "flood_raster",
+            "flood",
+            "array",
+            "impact",
+            "flood_impact",
+        ]:
             candidate = value.get(key)
+
             if isinstance(candidate, np.ndarray):
                 return candidate
 
@@ -846,13 +966,24 @@ def build_map(scenario, map_mode, incident_id):
         facility_rank = safe_int(report.get("facility_rank", 1), 1)
         route_rank = safe_int(report.get("route_rank", 1), 1)
 
-        route_rows = ROUTES_ALTERNATIVES[
-            (ROUTES_ALTERNATIVES["scenario"] == scenario)
-            & (ROUTES_ALTERNATIVES["incident_id"] == incident_id)
-            & (ROUTES_ALTERNATIVES["facility_rank"] == facility_rank)
-            & (ROUTES_ALTERNATIVES["route_rank"] == route_rank)
-        ]
+        model_scenario = resolve_model_scenario(scenario)
 
+route_rows = ROUTES_ALTERNATIVES[
+    (ROUTES_ALTERNATIVES["scenario"].astype(str).str.strip() == model_scenario)
+    & (ROUTES_ALTERNATIVES["incident_id"].astype(str) == str(incident_id))
+    & (
+        pd.to_numeric(
+            ROUTES_ALTERNATIVES["facility_rank"],
+            errors="coerce"
+        ) == facility_rank
+    )
+    & (
+        pd.to_numeric(
+            ROUTES_ALTERNATIVES["route_rank"],
+            errors="coerce"
+        ) == route_rank
+    )
+]
         if len(route_rows):
             add_route(
                 fmap,
@@ -1261,14 +1392,27 @@ with st.container():
             "Map mode", ["Flood Scenario", "Emergency Response"], index=0, horizontal=True
         )
 
+    model_scenario = resolve_model_scenario(scenario)
+
+incident_ids = sorted(
+    INCIDENT_REPORT[
+        INCIDENT_REPORT["scenario"].astype(str).str.strip() == model_scenario
+    ]["incident_id"]
+    .dropna()
+    .astype(str)
+    .unique()
+    .tolist()
+)
+
+if not incident_ids:
     incident_ids = sorted(
-        INCIDENT_REPORT[INCIDENT_REPORT["scenario"] == scenario]["incident_id"]
-        .dropna().astype(str).unique().tolist()
+        INCIDENT_REPORT["incident_id"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
     )
-    if not incident_ids:
-        incident_ids = sorted(
-            INCIDENT_REPORT["incident_id"].dropna().astype(str).unique().tolist()
-        )
+    
 
     with ctrl_cols[2]:
         incident_id = st.selectbox("Emergency incident", incident_ids, index=0)
