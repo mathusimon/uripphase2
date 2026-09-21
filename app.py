@@ -133,10 +133,30 @@ try:
         st.write("DEBUG — KPI scenarios:")
         st.write(kpis["scenario"].unique().tolist())
 
+        st.write("DEBUG — KPI columns:")
+        st.write(kpis.columns.tolist())
+
     situation = MODEL.get("emergency", {}).get("situation_report")
     if isinstance(situation, pd.DataFrame):
         st.write("DEBUG — situation scenarios:")
         st.write(situation["scenario"].unique().tolist())
+
+        st.write("DEBUG — situation columns:")
+        st.write(situation.columns.tolist())
+
+    st.write("DEBUG — traffic columns:")
+    st.write({
+        scenario: df.columns.tolist()
+        for scenario, df in MODEL["traffic"].items()
+        if isinstance(df, pd.DataFrame)
+    })
+
+    st.write("DEBUG — facilities columns:")
+    st.write({
+        scenario: df.columns.tolist()
+        for scenario, df in MODEL["facilities"].items()
+        if isinstance(df, pd.DataFrame)
+    })
 
 except Exception as e:
     st.error("Unable to load the frozen URIP model.")
