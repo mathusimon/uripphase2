@@ -112,10 +112,80 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
-missing_sections = [s for s in EXPECTED_SECTIONS if s not in MODEL]
-if missing_sections:
-    st.error(f"The uploaded model is incomplete.\n\nMissing sections: {', '.join(missing_sections)}")
-    st.stop()
+# ============================================================
+# FROZEN MODEL SCENARIO RESOLVER
+# ============================================================
+
+def resolve_model_scenario(scenario):
+    """
+    Convert the dashboard's display scenario name to the exact
+    scenario key used by the frozen analytical model.
+
+    Dashboard labels:
+        Normal
+        Moderate Rainfall
+        Heavy Rainfall
+        Severe Rainfall
+
+    Frozen model keys may be:
+        Normal
+        Moderate
+        Heavy
+        Severe
+    """
+
+    # Collect scenario keys actually present in the frozen model.
+    model_keys = set()
+
+    for section in ["traffic", "facilities", "flood", "roads"]:
+        obj = MODEL.get(section)
+
+        if isinstance(obj, dict):
+            model_keys.update(str(k) for k in obj.keys())
+
+    # Also inspect authoritative emergency tables.
+    for table in [
+        MODEL.get("emergency", {}).get("kpis"),
+        MODEL.get("emergency", {}).get("situation_report"),
+        MODEL.get("emergency", {}).get("incident_report"),
+    ]:
+        if isinstance(table, (pd.DataFrame, gpd.GeoDataFrame)):
+            if "scenario" in table.columns:
+                model_keys.update(
+                    table["scenario"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                )
+
+    scenario = str(scenario)
+
+    # Exact match first.
+    if scenario in model_keys:
+        return scenario
+
+    # Display-label -> frozen-model-key mapping.
+    aliases = {
+        "Moderate Rainfall": "Moderate",
+        "Heavy Rainfall": "Heavy",
+        "Severe Rainfall": "Severe",
+    }
+
+    candidate = aliases.get(scenario)
+
+    if candidate in model_keys:
+        return candidate
+
+    # Fallback: remove the display suffix.
+    candidate = scenario.replace(" Rainfall", "").strip()
+
+    if candidate in model_keys:
+        return candidate
+
+    # Last resort: return original value.
+    # This preserves compatibility if the frozen model actually
+    # uses the longer display names.
+    return scenario
 
 
 # ============================================================
@@ -179,12 +249,19 @@ def get_df(obj):
 
 
 def scenario_rows(df, scenario):
-    """Return rows belonging to a scenario."""
+    """Return rows belonging to the exact frozen-model scenario."""
+
     if df is None or len(df) == 0:
         return df
+
     if "scenario" not in df.columns:
         return df.iloc[0:0].copy()
-    return df[df["scenario"].astype(str) == str(scenario)].copy()
+
+    model_scenario = resolve_model_scenario(scenario)
+
+    return df[
+        df["scenario"].astype(str) == str(model_scenario)
+    ].copy()
 
 
 def first_value(df, columns, default=np.nan):
@@ -332,15 +409,32 @@ def get_route_options(scenario, incident_id, facility_rank):
 # ============================================================
 
 def get_roads(scenario):
-    roads = MODEL["traffic"].get(scenario)
+
+    model_scenario = resolve_model_scenario(scenario)
+
+    roads = MODEL["traffic"].get(model_scenario)
+
     if roads is None:
-        roads = MODEL["roads"].get(scenario)
-    return roads.copy() if roads is not None else gpd.GeoDataFrame()
+        roads = MODEL["roads"].get(model_scenario)
+
+    return (
+        roads.copy()
+        if roads is not None
+        else gpd.GeoDataFrame()
+    )
 
 
 def get_facilities(scenario):
-    facilities = MODEL["facilities"].get(scenario)
-    return facilities.copy() if facilities is not None else gpd.GeoDataFrame()
+
+    model_scenario = resolve_model_scenario(scenario)
+
+    facilities = MODEL["facilities"].get(model_scenario)
+
+    return (
+        facilities.copy()
+        if facilities is not None
+        else gpd.GeoDataFrame()
+    )
 
 
 def get_incidents():
@@ -362,11 +456,15 @@ def get_incident_flood(scenario):
 
 
 def get_flood_array(scenario):
+
     flood = MODEL["flood"]
+
     if not isinstance(flood, dict):
         return None
 
-    value = flood.get(scenario)
+    model_scenario = resolve_model_scenario(scenario)
+
+    value = flood.get(model_scenario)
     if isinstance(value, np.ndarray):
         return value
 
