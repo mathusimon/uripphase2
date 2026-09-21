@@ -119,6 +119,15 @@ try:
     st.write("DEBUG — flood keys:")
     st.write(list(MODEL.get("flood", {}).keys()))
 
+    st.write("DEBUG — emergency keys:")
+    st.write(list(MODEL.get("emergency", {}).keys()))
+
+    st.write("DEBUG — emergency object types:")
+    st.write({
+        k: type(v).__name__
+        for k, v in MODEL.get("emergency", {}).items()
+    })
+
     kpis = MODEL.get("emergency", {}).get("kpis")
     if isinstance(kpis, pd.DataFrame):
         st.write("DEBUG — KPI scenarios:")
