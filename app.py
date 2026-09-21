@@ -644,53 +644,30 @@ def get_dashboard_kpis(scenario):
         facilities_affected = int(
             operational.gt(0).sum()
         )
-
     # --------------------------------------------------------
-    # CBD population metrics
+    # Emergency population metrics
     # --------------------------------------------------------
+    # These values are authoritative in the frozen emergency KPI
+    # table. Do not recalculate them from population layers.
 
-    population_exposed = find_metric_in_model(
-        scenario,
-        [
-            "population_exposed",
-            "flood_exposed_population",
-            "exposed_population"
-        ],
-        preferred_sections=[
-            "summary",
-            "population"
-        ],
+    population_exposed = first_value(
+        pd.DataFrame([kpi]),
+        ["flood_exposed_incident_population"]
     )
 
-    access_disrupted = find_metric_in_model(
-        scenario,
-        [
-            "access_disrupted_population",
-            "access_disrupted",
-            "population_access_disrupted"
-        ],
-        preferred_sections=[
-            "summary",
-            "population"
-        ],
+    access_disrupted = first_value(
+        pd.DataFrame([kpi]),
+        ["access_disrupted_incident_population"]
     )
 
-    priority_population = find_metric_in_model(
-        scenario,
-        ["priority_population"],
-        preferred_sections=[
-            "summary",
-            "population"
-        ],
+    priority_population = first_value(
+        pd.DataFrame([kpi]),
+        ["priority_incident_population"]
     )
 
-    high_priority = find_metric_in_model(
-        scenario,
-        ["high_priority_population"],
-        preferred_sections=[
-            "summary",
-            "population"
-        ],
+    high_priority = first_value(
+        pd.DataFrame([kpi]),
+        ["high_priority_incident_population"]
     )
 
     # --------------------------------------------------------
