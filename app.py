@@ -12,7 +12,7 @@ import pandas as pd
 import streamlit as st
 from PIL import Image
 from streamlit_folium import st_folium
-from matplotlib import colormaps
+
 
 # ============================================================
 # PAGE CONFIG
@@ -566,11 +566,13 @@ def add_geojson(fmap, gdf, name, style_function, tooltip=None, show=False):
 
 def add_flood_raster(fmap, scenario):
     """
-    Render flood impact as an opaque continuous blue raster.
+    Render flood impact using an opaque continuous Viridis-like
+    colour ramp without Matplotlib.
 
-    Lower values use lighter blue.
-    Higher values use darker blue.
-    NaN/infinite cells remain transparent as nodata.
+    Low impact: purple/blue
+    Medium impact: green
+    High impact: yellow
+    Nodata cells: transparent
     """
     array = get_flood_array(scenario)
 
@@ -592,43 +594,64 @@ def add_flood_raster(fmap, scenario):
         minimum = np.nanmin(valid_values)
         maximum = np.nanmax(valid_values)
 
-        # Normalize flood impact to 0–1.
-        if maximum > minimum:
-            normalized = np.zeros_like(
-                array,
-                dtype=float,
-            )
+        normalized = np.zeros_like(
+            array,
+            dtype=float,
+        )
 
+        if maximum > minimum:
             normalized[finite] = (
                 (array[finite] - minimum)
                 / (maximum - minimum)
             )
-        else:
-            normalized = np.zeros_like(
-                array,
-                dtype=float,
-            )
 
-        # Use a blue colour ramp.
-        #
-        # Values are restricted to this portion of the Blues
-        # colourmap so low impacts remain visibly blue instead
-        # of appearing almost white.
-        blue_map = colormaps["viridis"]
-        colors = blue_map(
-            0.25 + normalized * 0.70
+        # Viridis colour stops:
+        # purple -> blue -> teal -> green -> yellow
+        viridis_stops = np.array(
+            [
+                [68,  1,   84],   # #440154
+                [72,  40,  120],  # #482878
+                [62,  73,  137],  # #3e4989
+                [49, 104, 142],  # #31688e
+                [38, 130, 142],  # #26828e
+                [53, 183, 121],  # #35b779
+                [110, 206, 88],  # #6ece58
+                [181, 222, 43],  # #b5de2b
+                [253, 231, 37],  # #fde725
+            ],
+            dtype=float,
         )
 
-        # Convert RGBA float values from Matplotlib to uint8.
-        rgba = (
-            colors * 255
-        ).astype(np.uint8)
+        positions = np.linspace(
+            0.0,
+            1.0,
+            len(viridis_stops),
+        )
 
-        # Nodata cells are transparent.
-        rgba[~finite, 3] = 0
+        rgb = np.zeros(
+            (*array.shape, 3),
+            dtype=np.uint8,
+        )
 
-        # Valid flood cells are completely opaque.
+        for channel in range(3):
+            rgb[:, :, channel] = np.interp(
+                normalized,
+                positions,
+                viridis_stops[:, channel],
+            ).astype(np.uint8)
+
+        rgba = np.zeros(
+            (*array.shape, 4),
+            dtype=np.uint8,
+        )
+
+        rgba[:, :, :3] = rgb
+
+        # Valid raster cells are fully opaque.
         rgba[finite, 3] = 255
+
+        # Nodata cells remain transparent.
+        rgba[~finite, 3] = 0
 
         image = Image.fromarray(
             rgba,
