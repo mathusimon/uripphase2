@@ -15,8 +15,9 @@ import streamlit as st
 from PIL import Image
 from streamlit_folium import st_folium
 
+
 # ============================================================
-# PAGE CONFIG
+# PAGE CONFIGURATION
 # ============================================================
 
 st.set_page_config(
@@ -25,6 +26,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
 
 # ============================================================
 # CONSTANTS
@@ -106,35 +108,38 @@ ROUTE_TOOLTIP_FIELDS = [
 def load_model():
     errors = []
 
-    for path, opener in [(MODEL_GZ, gzip.open), (MODEL_PKL, open)]:
+    for path, opener in [
+        (MODEL_GZ, gzip.open),
+        (MODEL_PKL, open),
+    ]:
         if not path.exists():
             continue
 
         try:
-            with opener(path, "rb") as f:
-                return pickle.load(f), path.name
+            with opener(path, "rb") as file:
+                return pickle.load(file), path.name
+        except Exception as error:
+            errors.append(f"{path.name}: {error}")
 
-        except Exception as e:
-            errors.append(f"{path.name}: {e}")
+    message = "No usable URIP model package found."
 
-    raise FileNotFoundError(
-        "No usable URIP model package found.\n\n"
-        + "\n".join(errors)
-    )
+    if errors:
+        message += "\n\n" + "\n".join(errors)
+
+    raise FileNotFoundError(message)
 
 
 try:
     MODEL, MODEL_FILE = load_model()
-
-except Exception as e:
+except Exception as error:
     st.error("Unable to load the frozen URIP model.")
-    st.exception(e)
+    st.exception(error)
     st.stop()
 
 
 missing_sections = [
-    s for s in EXPECTED_SECTIONS
-    if s not in MODEL
+    section for section in EXPECTED_SECTIONS
+    if section not in MODEL
 ]
 
 if missing_sections:
@@ -153,9 +158,7 @@ def safe_float(value, default=np.nan):
     try:
         if value is None or pd.isna(value):
             return default
-
         return float(value)
-
     except Exception:
         return default
 
@@ -164,54 +167,85 @@ def safe_int(value, default=0):
     try:
         if value is None or pd.isna(value):
             return default
-
         return int(round(float(value)))
-
     except Exception:
         return default
+
+
+def safe_bool(value, default=False):
+    """
+    Safely convert booleans, including string values loaded from CSV,
+    Excel, or serialized model files.
+    """
+    if value is None:
+        return default
+
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+
+        if normalized in {
+            "true",
+            "1",
+            "yes",
+            "y",
+            "affected",
+            "open",
+            "reachable",
+        }:
+            return True
+
+        if normalized in {
+            "false",
+            "0",
+            "no",
+            "n",
+            "not affected",
+            "closed",
+            "unreachable",
+        }:
+            return False
+
+    return bool(value)
 
 
 def fmt_number(value, decimals=0):
     value = safe_float(value)
 
-    return (
-        "—"
-        if np.isnan(value)
-        else f"{value:,.{decimals}f}"
-    )
+    if np.isnan(value):
+        return "—"
+
+    return f"{value:,.{decimals}f}"
 
 
 def fmt_minutes(value):
     value = safe_float(value)
 
-    return (
-        "—"
-        if np.isnan(value)
-        else f"{value:,.2f} min"
-    )
+    if np.isnan(value):
+        return "—"
+
+    return f"{value:,.2f} min"
 
 
 def fmt_pct(value):
     value = safe_float(value)
 
-    return (
-        "—"
-        if np.isnan(value)
-        else f"{value:,.1f}%"
-    )
+    if np.isnan(value):
+        return "—"
+
+    return f"{value:,.1f}%"
 
 
 def render_html(html, target=None):
-    """
-    Render HTML safely without changing the dashboard UI.
-    """
-
     dedented = textwrap.dedent(html).strip()
-
     collapsed = "\n".join(
-        line
-        for line in dedented.splitlines()
-        if line.strip() != ""
+        line for line in dedented.splitlines()
+        if line.strip()
     )
 
     (target or st).markdown(
@@ -221,37 +255,25 @@ def render_html(html, target=None):
 
 
 def get_df(obj):
-    """
-    Return a DataFrame / GeoDataFrame if obj is one,
-    otherwise None.
-    """
+    if isinstance(obj, (pd.DataFrame, gpd.GeoDataFrame)):
+        return obj
 
-    return (
-        obj
-        if isinstance(
-            obj,
-            (pd.DataFrame, gpd.GeoDataFrame),
-        )
-        else None
-    )
+    return None
 
 
 # ============================================================
-# FROZEN MODEL SCENARIO RESOLUTION
+# SCENARIO HELPERS
 # ============================================================
 
 def resolve_model_scenario(scenario):
     """
-    Translate the dashboard scenario label to the exact scenario
-    key used inside the frozen model.
+    Resolve dashboard labels to the exact scenario labels used in
+    the frozen model.
     """
-
     scenario = str(scenario).strip()
 
     aliases = {
-        "Normal": [
-            "Normal",
-        ],
+        "Normal": ["Normal"],
         "Moderate Rainfall": [
             "Moderate Rainfall",
             "Moderate",
@@ -266,14 +288,7 @@ def resolve_model_scenario(scenario):
         ],
     }
 
-    candidates = aliases.get(
-        scenario,
-        [scenario],
-    )
-
-    # --------------------------------------------------------
-    # First: scenario dictionaries
-    # --------------------------------------------------------
+    candidates = aliases.get(scenario, [scenario])
 
     for section in [
         "traffic",
@@ -281,40 +296,29 @@ def resolve_model_scenario(scenario):
         "flood",
         "roads",
     ]:
-
         obj = MODEL.get(section)
 
         if not isinstance(obj, dict):
             continue
 
         keys = {
-            str(k).strip()
-            for k in obj.keys()
+            str(key).strip()
+            for key in obj.keys()
         }
 
         for candidate in candidates:
-
             if candidate in keys:
                 return candidate
 
-    # --------------------------------------------------------
-    # Second: authoritative emergency tables
-    # --------------------------------------------------------
-
-    emergency = MODEL.get(
-        "emergency",
-        {},
-    )
+    emergency = MODEL.get("emergency", {})
 
     if isinstance(emergency, dict):
-
         for table_name in [
             "kpis",
             "situation_report",
             "incident_report",
             "incident_comparison",
         ]:
-
             table = emergency.get(table_name)
 
             if not isinstance(
@@ -335,7 +339,6 @@ def resolve_model_scenario(scenario):
             )
 
             for candidate in candidates:
-
                 if candidate in values:
                     return candidate
 
@@ -343,19 +346,13 @@ def resolve_model_scenario(scenario):
 
 
 def scenario_rows(df, scenario):
-    """
-    Return only rows belonging to the requested dashboard scenario.
-    """
-
     if df is None or len(df) == 0:
         return df
 
     if "scenario" not in df.columns:
         return df.iloc[0:0].copy()
 
-    model_scenario = resolve_model_scenario(
-        scenario
-    )
+    model_scenario = resolve_model_scenario(scenario)
 
     values = (
         df["scenario"]
@@ -363,21 +360,14 @@ def scenario_rows(df, scenario):
         .str.strip()
     )
 
-    return df[
-        values == model_scenario
-    ].copy()
+    return df[values == model_scenario].copy()
 
 
 def first_value(df, columns, default=np.nan):
-    """
-    Return the first non-null value from the first matching column.
-    """
-
     if df is None or len(df) == 0:
         return default
 
     for column in columns:
-
         if column not in df.columns:
             continue
 
@@ -390,7 +380,7 @@ def first_value(df, columns, default=np.nan):
 
 
 # ============================================================
-# AUTHORITATIVE EMERGENCY TABLES
+# AUTHORITATIVE MODEL TABLES
 # ============================================================
 
 EMERGENCY = MODEL["emergency"]
@@ -407,45 +397,29 @@ ROUTES_RECOMMENDED = MODEL["routes"]["recommended"].copy()
 
 
 # ============================================================
-# SCENARIO ACCESSORS
+# MODEL ACCESSORS
 # ============================================================
 
 def get_emergency_kpi(scenario):
+    rows = scenario_rows(EMERGENCY_KPIS, scenario)
 
-    rows = scenario_rows(
-        EMERGENCY_KPIS,
-        scenario,
-    )
+    if len(rows):
+        return rows.iloc[0]
 
-    return (
-        rows.iloc[0]
-        if len(rows)
-        else pd.Series(dtype=object)
-    )
+    return pd.Series(dtype=object)
 
 
 def get_situation(scenario):
+    rows = scenario_rows(SITUATION_REPORT, scenario)
 
-    rows = scenario_rows(
-        SITUATION_REPORT,
-        scenario,
-    )
+    if len(rows):
+        return rows.iloc[0]
 
-    return (
-        rows.iloc[0]
-        if len(rows)
-        else pd.Series(dtype=object)
-    )
+    return pd.Series(dtype=object)
 
 
-def get_incident_report(
-    scenario,
-    incident_id,
-):
-
-    model_scenario = resolve_model_scenario(
-        scenario
-    )
+def get_incident_report(scenario, incident_id):
+    model_scenario = resolve_model_scenario(scenario)
 
     rows = INCIDENT_REPORT[
         (
@@ -454,29 +428,21 @@ def get_incident_report(
             .str.strip()
             == model_scenario
         )
-        &
-        (
+        & (
             INCIDENT_REPORT["incident_id"]
             .astype(str)
             == str(incident_id)
         )
     ]
 
-    return (
-        rows.iloc[0]
-        if len(rows)
-        else pd.Series(dtype=object)
-    )
+    if len(rows):
+        return rows.iloc[0]
+
+    return pd.Series(dtype=object)
 
 
-def get_facility_options(
-    scenario,
-    incident_id,
-):
-
-    model_scenario = resolve_model_scenario(
-        scenario
-    )
+def get_facility_options(scenario, incident_id):
+    model_scenario = resolve_model_scenario(scenario)
 
     rows = FACILITY_OPTIONS[
         (
@@ -485,8 +451,7 @@ def get_facility_options(
             .str.strip()
             == model_scenario
         )
-        &
-        (
+        & (
             FACILITY_OPTIONS["incident_id"]
             .astype(str)
             == str(incident_id)
@@ -494,23 +459,13 @@ def get_facility_options(
     ]
 
     if len(rows):
-
-        return rows.sort_values(
-            ["facility_rank"]
-        )
+        return rows.sort_values("facility_rank")
 
     return rows
 
 
-def get_route_options(
-    scenario,
-    incident_id,
-    facility_rank,
-):
-
-    model_scenario = resolve_model_scenario(
-        scenario
-    )
+def get_route_options(scenario, incident_id, facility_rank):
+    model_scenario = resolve_model_scenario(scenario)
 
     rows = ROUTES_ALTERNATIVES[
         (
@@ -519,152 +474,94 @@ def get_route_options(
             .str.strip()
             == model_scenario
         )
-        &
-        (
+        & (
             ROUTES_ALTERNATIVES["incident_id"]
             .astype(str)
             == str(incident_id)
         )
-        &
-        (
+        & (
             pd.to_numeric(
                 ROUTES_ALTERNATIVES["facility_rank"],
                 errors="coerce",
             )
-            == safe_int(
-                facility_rank,
-                0,
-            )
+            == safe_int(facility_rank, 0)
         )
     ]
 
     if len(rows):
-
-        return rows.sort_values(
-            ["route_rank"]
-        )
+        return rows.sort_values("route_rank")
 
     return rows
 
 
-# ============================================================
-# SCENARIO DATA
-# ============================================================
-
 def get_roads(scenario):
+    model_scenario = resolve_model_scenario(scenario)
 
-    model_scenario = resolve_model_scenario(
-        scenario
-    )
-
-    roads = MODEL["traffic"].get(
-        model_scenario
-    )
+    roads = MODEL["traffic"].get(model_scenario)
 
     if roads is None:
+        roads = MODEL["roads"].get(model_scenario)
 
-        roads = MODEL["roads"].get(
-            model_scenario
-        )
+    if roads is None:
+        return gpd.GeoDataFrame()
 
-    return (
-        roads.copy()
-        if roads is not None
-        else gpd.GeoDataFrame()
-    )
+    return roads.copy()
 
 
 def get_facilities(scenario):
+    model_scenario = resolve_model_scenario(scenario)
 
-    model_scenario = resolve_model_scenario(
-        scenario
-    )
+    facilities = MODEL["facilities"].get(model_scenario)
 
-    facilities = MODEL["facilities"].get(
-        model_scenario
-    )
+    if facilities is None:
+        return gpd.GeoDataFrame()
 
-    return (
-        facilities.copy()
-        if facilities is not None
-        else gpd.GeoDataFrame()
-    )
+    return facilities.copy()
 
 
 def get_incidents():
-
     incidents = MODEL["incidents"]
 
-    if isinstance(
-        incidents,
-        dict,
-    ):
-
+    if isinstance(incidents, dict):
         points = incidents.get("points")
 
         if isinstance(
             points,
             (pd.DataFrame, gpd.GeoDataFrame),
         ):
-
             return points.copy()
 
     return gpd.GeoDataFrame()
 
 
 def get_incident_flood(scenario):
-
     incidents = MODEL["incidents"]
 
-    if isinstance(
-        incidents,
-        dict,
-    ):
-
+    if isinstance(incidents, dict):
         flood = incidents.get("flood")
 
         if isinstance(
             flood,
             (pd.DataFrame, gpd.GeoDataFrame),
         ):
-
-            return scenario_rows(
-                flood,
-                scenario,
-            )
+            return scenario_rows(flood, scenario)
 
     return gpd.GeoDataFrame()
 
 
 def get_flood_array(scenario):
-
     flood = MODEL["flood"]
 
-    if not isinstance(
-        flood,
-        dict,
-    ):
+    if not isinstance(flood, dict):
         return None
 
-    model_scenario = resolve_model_scenario(
-        scenario
-    )
+    model_scenario = resolve_model_scenario(scenario)
+    value = flood.get(model_scenario)
 
-    value = flood.get(
-        model_scenario
-    )
-
-    if isinstance(
-        value,
-        np.ndarray,
-    ):
+    if isinstance(value, np.ndarray):
         return value
 
-    if isinstance(
-        value,
-        dict,
-    ):
-
+    if isinstance(value, dict):
         for key in [
             "flood_raster",
             "flood",
@@ -672,65 +569,42 @@ def get_flood_array(scenario):
             "impact",
             "flood_impact",
         ]:
-
             candidate = value.get(key)
 
-            if isinstance(
-                candidate,
-                np.ndarray,
-            ):
+            if isinstance(candidate, np.ndarray):
                 return candidate
 
     return None
 
 
 # ============================================================
-# AUTHORITATIVE CBD POPULATION EXTRACTION
+# POPULATION METRICS
 # ============================================================
 
-def get_population_metric(
-    scenario,
-    metric,
-):
-    """
-    Read the CBD-wide population metric from the frozen model.
-    """
+def get_population_metric(scenario, metric):
+    population = MODEL.get("population", {})
 
-    population = MODEL.get(
-        "population",
-        {}
-    )
-
-    if not isinstance(
-        population,
-        dict,
-    ):
+    if not isinstance(population, dict):
         return np.nan
 
-    model_scenario = resolve_model_scenario(
-        scenario
-    )
+    model_scenario = resolve_model_scenario(scenario)
 
     preferred_objects = {
-
         "population_exposed": [
             "authoritative_population",
             "population_exposure_results",
             "state_population",
         ],
-
         "access_disrupted": [
             "population_access_results",
             "authoritative_population",
             "state_population",
         ],
-
         "priority_population": [
             "population_priority_results",
             "authoritative_population",
             "state_population",
         ],
-
         "high_priority_population": [
             "population_priority_results",
             "authoritative_population",
@@ -738,156 +612,82 @@ def get_population_metric(
         ],
     }
 
-    candidate_names = preferred_objects.get(
-        metric,
-        [],
-    )
+    metric_aliases = {
+        "population_exposed": [
+            "population_exposed",
+            "flood_exposed_population",
+            "exposed_population",
+        ],
+        "access_disrupted": [
+            "access_disrupted_population",
+            "access_disrupted",
+            "population_access_disrupted",
+        ],
+        "priority_population": [
+            "priority_population",
+        ],
+        "high_priority_population": [
+            "high_priority_population",
+        ],
+    }
 
-    # --------------------------------------------------------
-    # First look in specifically named authoritative objects.
-    # --------------------------------------------------------
+    object_names = preferred_objects.get(metric, [])
+    aliases = metric_aliases.get(metric, [])
 
-    for object_name in candidate_names:
-
-        obj = population.get(
-            object_name
-        )
+    for object_name in object_names:
+        obj = population.get(object_name)
 
         if isinstance(
             obj,
             (pd.DataFrame, gpd.GeoDataFrame),
         ):
+            frame = obj.copy()
 
-            df = obj.copy()
+            if "scenario" in frame.columns:
+                frame = scenario_rows(frame, scenario)
 
-            if "scenario" in df.columns:
-
-                df = scenario_rows(
-                    df,
-                    scenario,
-                )
-
-            if len(df) == 0:
+            if len(frame) == 0:
                 continue
 
-            metric_aliases = {
-
-                "population_exposed": [
-                    "population_exposed",
-                    "flood_exposed_population",
-                    "exposed_population",
-                ],
-
-                "access_disrupted": [
-                    "access_disrupted_population",
-                    "access_disrupted",
-                    "population_access_disrupted",
-                ],
-
-                "priority_population": [
-                    "priority_population",
-                ],
-
-                "high_priority_population": [
-                    "high_priority_population",
-                ],
-            }
-
-            for column in metric_aliases.get(
-                metric,
-                [],
-            ):
-
-                if column not in df.columns:
+            for column in aliases:
+                if column not in frame.columns:
                     continue
 
                 values = pd.to_numeric(
-                    df[column],
+                    frame[column],
                     errors="coerce",
                 ).dropna()
 
                 if len(values):
-
                     return values.iloc[0]
 
-    # --------------------------------------------------------
-    # Scenario dictionary
-    # --------------------------------------------------------
+    for object_name in object_names:
+        obj = population.get(object_name)
 
-    for object_name in candidate_names:
-
-        obj = population.get(
-            object_name
-        )
-
-        if not isinstance(
-            obj,
-            dict,
-        ):
+        if not isinstance(obj, dict):
             continue
 
         scenario_obj = None
 
-        for key in [
-            model_scenario,
-            scenario,
-        ]:
-
+        for key in [model_scenario, scenario]:
             if key in obj:
-
                 scenario_obj = obj[key]
                 break
 
         if scenario_obj is None:
             continue
 
-        if isinstance(
-            scenario_obj,
-            dict,
-        ):
+        if isinstance(scenario_obj, dict):
+            for key in aliases:
+                if key not in scenario_obj:
+                    continue
 
-            aliases = {
+                value = safe_float(scenario_obj[key])
 
-                "population_exposed": [
-                    "population_exposed",
-                    "flood_exposed_population",
-                    "exposed_population",
-                ],
-
-                "access_disrupted": [
-                    "access_disrupted_population",
-                    "access_disrupted",
-                    "population_access_disrupted",
-                ],
-
-                "priority_population": [
-                    "priority_population",
-                ],
-
-                "high_priority_population": [
-                    "high_priority_population",
-                ],
-            }
-
-            for key in aliases.get(
-                metric,
-                [],
-            ):
-
-                if key in scenario_obj:
-
-                    value = safe_float(
-                        scenario_obj[key]
-                    )
-
-                    if not np.isnan(value):
-                        return value
-
+                if not np.isnan(value):
+                    return value
         else:
-
-            value = safe_float(
-                scenario_obj
-            )
+            value = safe_float(scenario_obj)
 
             if not np.isnan(value):
                 return value
@@ -900,67 +700,35 @@ def get_population_metric(
 # ============================================================
 
 def get_dashboard_kpis(scenario):
-    """
-    Read dashboard KPIs exclusively from the frozen model.
-    """
-
-    kpi = get_emergency_kpi(
-        scenario
-    )
-
-    situation = get_situation(
-        scenario
-    )
-
-    roads = get_roads(
-        scenario
-    )
-
-    facilities = get_facilities(
-        scenario
-    )
-
-    # --------------------------------------------------------
-    # Flood impact
-    # --------------------------------------------------------
+    kpi = get_emergency_kpi(scenario)
+    situation = get_situation(scenario)
+    roads = get_roads(scenario)
+    facilities = get_facilities(scenario)
 
     flood_impact = first_value(
         pd.DataFrame([kpi]),
         ["mean_flood_impact"],
     )
 
-    if np.isnan(
-        safe_float(flood_impact)
-    ):
-
+    if np.isnan(safe_float(flood_impact)):
         flood_impact = first_value(
             pd.DataFrame([situation]),
             ["mean_incident_flood_impact"],
         )
-
-    # --------------------------------------------------------
-    # Roads
-    # --------------------------------------------------------
 
     roads_affected = np.nan
     roads_closed = np.nan
     mean_vc = np.nan
 
     if len(roads):
-
         if "affected_pct" in roads.columns:
-
             affected = pd.to_numeric(
                 roads["affected_pct"],
                 errors="coerce",
             )
-
-            roads_affected = int(
-                affected.gt(0).sum()
-            )
+            roads_affected = int(affected.gt(0).sum())
 
         elif "access_status" in roads.columns:
-
             roads_affected = int(
                 roads["access_status"]
                 .astype(str)
@@ -970,62 +738,28 @@ def get_dashboard_kpis(scenario):
             )
 
         if "passability" in roads.columns:
-
             passability = pd.to_numeric(
                 roads["passability"],
                 errors="coerce",
             )
-
-            roads_closed = int(
-                passability.eq(0).sum()
-            )
+            roads_closed = int(passability.eq(0).sum())
 
         if "final_vc_ratio" in roads.columns:
-
             mean_vc = pd.to_numeric(
                 roads["final_vc_ratio"],
                 errors="coerce",
             ).mean()
 
-    # --------------------------------------------------------
-    # Facilities
-    # --------------------------------------------------------
-
     facilities_affected = np.nan
 
     if (
         len(facilities)
-        and "operationally_affected"
-        in facilities.columns
+        and "operationally_affected" in facilities.columns
     ):
-
-        values = facilities[
-            "operationally_affected"
-        ]
-
-        if pd.api.types.is_bool_dtype(
-            values
-        ):
-
-            facilities_affected = int(
-                values.sum()
-            )
-
-        else:
-
-            facilities_affected = int(
-                pd.to_numeric(
-                    values,
-                    errors="coerce",
-                )
-                .fillna(0)
-                .gt(0)
-                .sum()
-            )
-
-    # --------------------------------------------------------
-    # CBD-wide population
-    # --------------------------------------------------------
+        facilities_affected = sum(
+            safe_bool(value)
+            for value in facilities["operationally_affected"]
+        )
 
     population_exposed = get_population_metric(
         scenario,
@@ -1047,19 +781,12 @@ def get_dashboard_kpis(scenario):
         "high_priority_population",
     )
 
-    # --------------------------------------------------------
-    # Emergency response
-    # --------------------------------------------------------
-
     mean_response = first_value(
         pd.DataFrame([kpi]),
         ["mean_response_time_min"],
     )
 
-    if np.isnan(
-        safe_float(mean_response)
-    ):
-
+    if np.isnan(safe_float(mean_response)):
         mean_response = first_value(
             pd.DataFrame([situation]),
             ["mean_response_time_min"],
@@ -1083,21 +810,16 @@ def get_dashboard_kpis(scenario):
 # GEO HELPERS
 # ============================================================
 
-def prepare_gdf(gdf):
-
-    if gdf is None:
+def prepare_gdf(frame):
+    if frame is None:
         return gpd.GeoDataFrame()
 
-    if len(gdf) == 0:
-        return gdf.copy()
+    if len(frame) == 0:
+        return frame.copy()
 
-    result = gdf.copy()
+    result = frame.copy()
 
-    if not isinstance(
-        result,
-        gpd.GeoDataFrame,
-    ):
-
+    if not isinstance(result, gpd.GeoDataFrame):
         if "geometry" not in result.columns:
             return gpd.GeoDataFrame()
 
@@ -1107,18 +829,13 @@ def prepare_gdf(gdf):
         )
 
     if result.crs is None:
-
         result = result.set_crs(
             ANALYSIS_CRS,
             allow_override=True,
         )
 
     try:
-
-        result = result.to_crs(
-            DISPLAY_CRS
-        )
-
+        result = result.to_crs(DISPLAY_CRS)
     except Exception:
         pass
 
@@ -1127,23 +844,22 @@ def prepare_gdf(gdf):
 
 def add_geojson(
     fmap,
-    gdf,
+    frame,
     name,
     style_function,
     tooltip=None,
     show=False,
 ):
-
-    if gdf is None or len(gdf) == 0:
+    if frame is None or len(frame) == 0:
         return
 
-    gdf = prepare_gdf(gdf)
+    frame = prepare_gdf(frame)
 
-    if len(gdf) == 0:
+    if len(frame) == 0:
         return
 
     folium.GeoJson(
-        gdf.to_json(),
+        frame.to_json(),
         name=name,
         style_function=style_function,
         tooltip=tooltip,
@@ -1156,20 +872,13 @@ def add_geojson(
 # FLOOD MAP
 # ============================================================
 
-def add_flood_raster(
-    fmap,
-    scenario,
-):
-
-    array = get_flood_array(
-        scenario
-    )
+def add_flood_raster(fmap, scenario):
+    array = get_flood_array(scenario)
 
     if array is None:
         return
 
     try:
-
         array = np.asarray(array)
 
         if array.ndim != 2:
@@ -1184,14 +893,11 @@ def add_flood_raster(
         maximum = np.nanmax(array)
 
         if maximum > minimum:
-
             normalized = (
                 (array - minimum)
                 / (maximum - minimum)
             )
-
         else:
-
             normalized = np.zeros_like(
                 array,
                 dtype=float,
@@ -1219,11 +925,7 @@ def add_flood_raster(
         )
 
         buffer = io.BytesIO()
-
-        image.save(
-            buffer,
-            format="PNG",
-        )
+        image.save(buffer, format="PNG")
 
         encoded = base64.b64encode(
             buffer.getvalue()
@@ -1248,65 +950,47 @@ def add_flood_raster(
 # ROAD MAP
 # ============================================================
 
-def add_roads_layer(
-    fmap,
-    roads,
-):
-
+def add_roads_layer(fmap, roads):
     if roads is None or len(roads) == 0:
         return
 
-    roads = prepare_gdf(
-        roads
-    )
+    roads = prepare_gdf(roads)
 
     if len(roads) == 0:
         return
 
-    for status, color in ROAD_COLORS.items():
+    if "passability" in roads.columns:
+        passability = pd.to_numeric(
+            roads["passability"],
+            errors="coerce",
+        )
 
-        if "passability" not in roads.columns:
+        subsets = {
+            "Passable": roads[passability >= 0.999],
+            "Closed": roads[passability <= 0.001],
+        }
 
-            subset = roads.iloc[0:0]
+        if "access_status" in roads.columns:
+            access_status = roads["access_status"].astype(str)
 
-        elif status == "Passable":
-
-            subset = roads[
-                pd.to_numeric(
-                    roads["passability"],
-                    errors="coerce",
-                ) >= 0.999
+            subsets["Minor Disruption"] = roads[
+                access_status.eq("Minor Disruption")
             ]
 
-        elif status == "Closed":
-
-            subset = roads[
-                pd.to_numeric(
-                    roads["passability"],
-                    errors="coerce",
-                ) <= 0.001
+            subsets["Severe Disruption"] = roads[
+                access_status.eq("Severe Disruption")
             ]
-
-        elif status in (
-            "Minor Disruption",
-            "Severe Disruption",
-        ):
-
-            if "access_status" in roads.columns:
-
-                subset = roads[
-                    roads["access_status"]
-                    .astype(str)
-                    .eq(status)
-                ]
-
-            else:
-
-                subset = roads.iloc[0:0]
-
         else:
+            subsets["Minor Disruption"] = roads.iloc[0:0]
+            subsets["Severe Disruption"] = roads.iloc[0:0]
+    else:
+        subsets = {
+            status: roads.iloc[0:0]
+            for status in ROAD_COLORS
+        }
 
-            subset = roads.iloc[0:0]
+    for status, color in ROAD_COLORS.items():
+        subset = subsets.get(status, roads.iloc[0:0])
 
         if len(subset) == 0:
             continue
@@ -1319,7 +1003,7 @@ def add_roads_layer(
                 "weight": 2.5,
                 "opacity": 0.85,
             },
-            show=(status != "Passable"),
+            show=status != "Passable",
         ).add_to(fmap)
 
 
@@ -1332,50 +1016,31 @@ def add_facilities_layer(
     facilities,
     recommended_facility_id=None,
 ):
-
     if facilities is None or len(facilities) == 0:
         return
 
-    facilities = prepare_gdf(
-        facilities
-    )
+    facilities = prepare_gdf(facilities)
 
     if len(facilities) == 0:
         return
 
     for _, row in facilities.iterrows():
-
         geometry = row.geometry
 
         if geometry is None:
             continue
 
         try:
-
             if geometry.geom_type == "Point":
-
-                lat, lon = (
-                    geometry.y,
-                    geometry.x,
-                )
-
+                lat, lon = geometry.y, geometry.x
             else:
-
                 point = geometry.centroid
-
-                lat, lon = (
-                    point.y,
-                    point.x,
-                )
-
+                lat, lon = point.y, point.x
         except Exception:
             continue
 
         facility_id = str(
-            row.get(
-                "facility_id",
-                "",
-            )
+            row.get("facility_id", "")
         )
 
         facility_name = str(
@@ -1395,9 +1060,11 @@ def add_facilities_layer(
             )
         )
 
-        operationally_affected = row.get(
-            "operationally_affected",
-            False,
+        affected = safe_bool(
+            row.get(
+                "operationally_affected",
+                False,
+            )
         )
 
         is_recommended = (
@@ -1407,42 +1074,26 @@ def add_facilities_layer(
         )
 
         if is_recommended:
-
             color = "#00ffff"
             radius = 11
             fill_opacity = 1.0
-
-        elif bool(
-            operationally_affected
-        ):
-
+            status_text = "Recommended"
+        elif affected:
             color = "#e34a33"
             radius = 6
             fill_opacity = 0.85
-
+            status_text = "Operationally affected"
         else:
-
             color = "#3388ff"
             radius = 5
             fill_opacity = 0.75
-
-        if is_recommended:
-
-            status_text = "Recommended"
-
-        elif bool(
-            operationally_affected
-        ):
-
-            status_text = "Operationally affected"
-
-        else:
-
             status_text = "Operational"
 
         popup_html = f"""
         <div style="font-family:Arial;min-width:220px;">
-            <h4 style="margin-bottom:6px;">{facility_name}</h4>
+            <h4 style="margin-bottom:6px;">
+                {facility_name}
+            </h4>
             <b>Facility ID:</b> {facility_id}<br>
             <b>Type:</b> {facility_type}<br>
             <b>Status:</b> {status_text}
@@ -1474,36 +1125,24 @@ def add_incidents_layer(
     incidents,
     selected_incident,
 ):
-
     if incidents is None or len(incidents) == 0:
         return
 
-    incidents = prepare_gdf(
-        incidents
-    )
+    incidents = prepare_gdf(incidents)
 
     for _, row in incidents.iterrows():
-
         geometry = row.geometry
 
         if geometry is None:
             continue
 
         try:
-
-            lat, lon = (
-                geometry.y,
-                geometry.x,
-            )
-
+            lat, lon = geometry.y, geometry.x
         except Exception:
             continue
 
         incident_id = str(
-            row.get(
-                "incident_id",
-                "",
-            )
+            row.get("incident_id", "")
         )
 
         selected = (
@@ -1511,17 +1150,8 @@ def add_incidents_layer(
             == str(selected_incident)
         )
 
-        color = (
-            "#ff0000"
-            if selected
-            else "#ffcc00"
-        )
-
-        radius = (
-            10
-            if selected
-            else 6
-        )
+        color = "#ff0000" if selected else "#ffcc00"
+        radius = 10 if selected else 6
 
         folium.CircleMarker(
             location=[lat, lon],
@@ -1537,7 +1167,7 @@ def add_incidents_layer(
 
 
 # ============================================================
-# ROUTE DRAWING
+# ROUTE MAP
 # ============================================================
 
 def add_route(
@@ -1548,50 +1178,49 @@ def add_route(
     name="Recommended emergency route",
     show=True,
 ):
-
     if route_row is None:
         return
 
-    if isinstance(
-        route_row,
-        pd.DataFrame,
-    ):
-
+    if isinstance(route_row, pd.DataFrame):
         if len(route_row) == 0:
             return
 
         route_row = route_row.iloc[0]
 
-    if route_row.get(
-        "geometry",
-        None,
-    ) is None:
+    geometry = route_row.get("geometry", None)
 
+    if geometry is None:
         return
 
     try:
-
         route_gdf = gpd.GeoDataFrame(
             [route_row],
             geometry="geometry",
             crs=ANALYSIS_CRS,
         )
 
-        route_gdf = prepare_gdf(
-            route_gdf
-        )
+        route_gdf = prepare_gdf(route_gdf)
 
         fields = [
-            f
-            for f, _ in ROUTE_TOOLTIP_FIELDS
-            if f in route_gdf.columns
+            field
+            for field, _ in ROUTE_TOOLTIP_FIELDS
+            if field in route_gdf.columns
         ]
 
         aliases = [
-            a
-            for f, a in ROUTE_TOOLTIP_FIELDS
-            if f in route_gdf.columns
+            alias
+            for field, alias in ROUTE_TOOLTIP_FIELDS
+            if field in route_gdf.columns
         ]
+
+        tooltip = None
+
+        if fields:
+            tooltip = folium.GeoJsonTooltip(
+                fields=fields,
+                aliases=aliases,
+                localize=True,
+            )
 
         folium.GeoJson(
             route_gdf.to_json(),
@@ -1602,11 +1231,7 @@ def add_route(
                 "opacity": 0.95,
             },
             show=show,
-            tooltip=folium.GeoJsonTooltip(
-                fields=fields,
-                aliases=aliases,
-                localize=True,
-            ),
+            tooltip=tooltip,
         ).add_to(fmap)
 
     except Exception:
@@ -1614,25 +1239,16 @@ def add_route(
 
 
 # ============================================================
-# BUILD MAP
+# MAP BUILDING
 # ============================================================
 
-def build_map(
-    scenario,
-    map_mode,
-    incident_id,
-):
-
+def build_map(scenario, map_mode, incident_id):
     fmap = folium.Map(
         location=MAP_CENTER,
         zoom_start=MAP_ZOOM,
         control_scale=True,
         tiles=None,
     )
-
-    # --------------------------------------------------------
-    # Base maps
-    # --------------------------------------------------------
 
     folium.TileLayer(
         tiles="OpenStreetMap",
@@ -1642,22 +1258,15 @@ def build_map(
 
     folium.TileLayer(
         tiles=(
-            "https://server.arcgisonline.com/ArcGIS/rest/services/"
-            "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            "https://server.arcgisonline.com/ArcGIS/rest/"
+            "services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
         ),
         attr="Esri World Imagery",
         name="Satellite",
         control=True,
     ).add_to(fmap)
 
-    # --------------------------------------------------------
-    # Flood layer
-    # --------------------------------------------------------
-
-    add_flood_raster(
-        fmap,
-        scenario,
-    )
+    add_flood_raster(fmap, scenario)
 
     folium.Rectangle(
         bounds=FLOOD_BOUNDS,
@@ -1667,47 +1276,28 @@ def build_map(
         name="URIP analysis boundary",
     ).add_to(fmap)
 
-    # --------------------------------------------------------
-    # Roads
-    # --------------------------------------------------------
+    roads = get_roads(scenario)
 
-    roads = get_roads(
-        scenario
-    )
-
-    if map_mode in (
+    if map_mode in {
         "Flood Scenario",
         "Emergency Response",
-    ):
+    }:
+        add_roads_layer(fmap, roads)
 
-        add_roads_layer(
-            fmap,
-            roads,
-        )
-
-    # --------------------------------------------------------
-    # Emergency information
-    # --------------------------------------------------------
-
-    facilities = get_facilities(
-        scenario
-    )
-
+    facilities = get_facilities(scenario)
     incidents = get_incidents()
-
     report = get_incident_report(
         scenario,
         incident_id,
     )
 
-    recommended_facility_id = (
-        report.get(
+    recommended_facility_id = None
+
+    if len(report):
+        recommended_facility_id = report.get(
             "recommended_facility_id",
             None,
         )
-        if len(report)
-        else None
-    )
 
     add_facilities_layer(
         fmap,
@@ -1721,36 +1311,24 @@ def build_map(
         incident_id,
     )
 
-    # --------------------------------------------------------
-    # Selected incident flood point
-    # --------------------------------------------------------
-
-    incident_flood = get_incident_flood(
-        scenario
-    )
+    incident_flood = get_incident_flood(scenario)
 
     if len(incident_flood):
+        selected_flood = incident_flood[
+            incident_flood["incident_id"].astype(str)
+            == str(incident_id)
+        ].copy()
 
-        selected_flood = prepare_gdf(
-            incident_flood[
-                incident_flood["incident_id"]
-                == incident_id
-            ].copy()
-        )
+        selected_flood = prepare_gdf(selected_flood)
 
         for _, row in selected_flood.iterrows():
-
             geometry = row.geometry
 
             if geometry is None:
                 continue
 
             try:
-
-                lat, lon = (
-                    geometry.y,
-                    geometry.x,
-                )
+                lat, lon = geometry.y, geometry.x
 
                 impact = safe_float(
                     row.get(
@@ -1792,30 +1370,19 @@ def build_map(
                 ).add_to(fmap)
 
             except Exception:
-                pass
+                continue
 
     # --------------------------------------------------------
-    # Emergency route
+    # Correctly indented emergency route block
     # --------------------------------------------------------
-
-    if (
-        map_mode == "Emergency Response"
-        and len(report)
-    ):
-
+    if map_mode == "Emergency Response" and len(report):
         facility_rank = safe_int(
-            report.get(
-                "facility_rank",
-                1,
-            ),
+            report.get("facility_rank", 1),
             1,
         )
 
         route_rank = safe_int(
-            report.get(
-                "route_rank",
-                1,
-            ),
+            report.get("route_rank", 1),
             1,
         )
 
@@ -1825,37 +1392,26 @@ def build_map(
 
         route_rows = ROUTES_ALTERNATIVES[
             (
-                ROUTES_ALTERNATIVES[
-                    "scenario"
-                ]
+                ROUTES_ALTERNATIVES["scenario"]
                 .astype(str)
                 .str.strip()
                 == model_scenario
             )
-            &
-            (
-                ROUTES_ALTERNATIVES[
-                    "incident_id"
-                ]
+            & (
+                ROUTES_ALTERNATIVES["incident_id"]
                 .astype(str)
                 == str(incident_id)
             )
-            &
-            (
+            & (
                 pd.to_numeric(
-                    ROUTES_ALTERNATIVES[
-                        "facility_rank"
-                    ],
+                    ROUTES_ALTERNATIVES["facility_rank"],
                     errors="coerce",
                 )
                 == facility_rank
             )
-            &
-            (
+            & (
                 pd.to_numeric(
-                    ROUTES_ALTERNATIVES[
-                        "route_rank"
-                    ],
+                    ROUTES_ALTERNATIVES["route_rank"],
                     errors="coerce",
                 )
                 == route_rank
@@ -1863,7 +1419,6 @@ def build_map(
         ]
 
         if len(route_rows):
-
             add_route(
                 fmap,
                 route_rows.iloc[0],
@@ -1873,10 +1428,6 @@ def build_map(
                 show=True,
             )
 
-    # --------------------------------------------------------
-    # Layer control
-    # --------------------------------------------------------
-
     folium.LayerControl(
         collapsed=False
     ).add_to(fmap)
@@ -1885,22 +1436,14 @@ def build_map(
 
 
 # ============================================================
-# UI HELPERS — status pills, badges, small display helpers
+# UI HELPERS
 # ============================================================
 
-def pill(
-    text,
-    kind="neutral",
-):
-    """
-    A small colored status badge.
-    kind: good | warn | bad | info | neutral.
-    """
-
+def pill(text, kind="neutral"):
     return (
         f'<span class="pill pill-{kind}">'
-        f'{text}'
-        f'</span>'
+        f"{text}"
+        "</span>"
     )
 
 
@@ -1909,79 +1452,46 @@ def route_status(
     closed_segments,
     is_recommended,
 ):
-
     if is_recommended:
         return "Recommended", "info"
 
-    if safe_int(
-        closed_segments,
-        0,
-    ) > 0:
-
+    if safe_int(closed_segments, 0) > 0:
         return "Closed", "bad"
 
-    delay_pct = safe_float(
-        delay_pct
-    )
+    delay_pct = safe_float(delay_pct)
 
-    if (
-        not np.isnan(delay_pct)
-        and delay_pct > 100
-    ):
-
+    if not np.isnan(delay_pct) and delay_pct > 100:
         return "At Risk", "bad"
 
-    if (
-        not np.isnan(delay_pct)
-        and delay_pct > 15
-    ):
-
+    if not np.isnan(delay_pct) and delay_pct > 15:
         return "Risky", "warn"
 
     return "Available", "good"
 
 
-def facility_status(
-    reachable,
-    delay_min,
-):
-
-    if not reachable:
+def facility_status(reachable, delay_min):
+    if not safe_bool(reachable):
         return "Unreachable", "bad"
 
-    delay_min = safe_float(
-        delay_min
-    )
+    delay_min = safe_float(delay_min)
 
-    if (
-        not np.isnan(delay_min)
-        and delay_min > 5
-    ):
-
+    if not np.isnan(delay_min) and delay_min > 5:
         return "At Risk", "warn"
 
     return "Accessible", "good"
 
 
-def get_incident_coords(
-    incident_id,
-):
-
-    incidents = prepare_gdf(
-        get_incidents()
-    )
+def get_incident_coords(incident_id):
+    incidents = prepare_gdf(get_incidents())
 
     if (
         len(incidents) == 0
-        or "incident_id"
-        not in incidents.columns
+        or "incident_id" not in incidents.columns
     ):
-
         return None, None
 
     rows = incidents[
-        incidents["incident_id"]
-        .astype(str)
+        incidents["incident_id"].astype(str)
         == str(incident_id)
     ]
 
@@ -1994,14 +1504,8 @@ def get_incident_coords(
         return None, None
 
     try:
-
-        return (
-            geometry.y,
-            geometry.x,
-        )
-
+        return geometry.y, geometry.x
     except Exception:
-
         return None, None
 
 
@@ -2012,32 +1516,28 @@ def get_incident_coords(
 render_html(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
     html, body, [class*="css"] {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-family: Inter, Arial, sans-serif;
     }
 
     .stApp {
-        background: radial-gradient(circle at 15% 0%, #0f2036 0%, #0a1420 45%) fixed;
+        background:
+            radial-gradient(
+                circle at 15% 0%,
+                #0f2036 0%,
+                #0a1420 45%
+            ) fixed;
     }
 
     [data-testid="stSidebar"] {
         background: #0c1728;
-        border-right: 1px solid #1c2c42;
-    }
-
-    [data-testid="stHeader"] {
-        background: transparent;
     }
 
     .block-container {
+        max-width: 1400px;
         padding-top: 1.6rem;
         padding-bottom: 2rem;
-        max-width: 1400px;
     }
-
-    /* ---------- header ---------- */
 
     .urip-header {
         display: flex;
@@ -2045,7 +1545,7 @@ render_html(
         justify-content: space-between;
         padding: 1rem 1.4rem;
         border-radius: 14px;
-        background: linear-gradient(135deg, #0e2136 0%, #0b1a2c 100%);
+        background: #0e2136;
         border: 1px solid #1c2c42;
         margin-bottom: 1.1rem;
     }
@@ -2060,34 +1560,32 @@ render_html(
         width: 42px;
         height: 42px;
         border-radius: 11px;
-        background: linear-gradient(135deg, #22c58b, #1a8dd8);
+        background: linear-gradient(
+            135deg,
+            #22c58b,
+            #1a8dd8
+        );
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 1.3rem;
-        flex-shrink: 0;
     }
 
     .urip-title {
         font-size: 1.35rem;
         font-weight: 800;
         color: #f2f6fb;
-        letter-spacing: -0.02em;
-        line-height: 1.1;
     }
 
     .urip-subtitle {
-        font-size: 0.82rem;
         color: #22c58b;
-        font-weight: 500;
-        margin-top: 0.1rem;
+        font-size: 0.82rem;
     }
 
     .urip-meta {
         text-align: right;
         color: #9fb2c9;
         font-size: 0.82rem;
-        line-height: 1.5;
     }
 
     .urip-meta b {
@@ -2099,41 +1597,33 @@ render_html(
         margin-top: 0.35rem;
         padding: 0.28rem 0.7rem;
         border-radius: 20px;
+        color: #22c58b;
         background: rgba(34, 197, 139, 0.12);
         border: 1px solid rgba(34, 197, 139, 0.4);
-        color: #22c58b;
         font-size: 0.72rem;
         font-weight: 700;
-        letter-spacing: 0.04em;
     }
 
-    /* ---------- generic panel ---------- */
-
-    .panel {
+    .panel,
+    .kpi-card {
         background: #101d30;
         border: 1px solid #1c2c42;
         border-radius: 14px;
+    }
+
+    .panel {
         padding: 1.1rem 1.2rem;
         margin-bottom: 1.1rem;
     }
 
     .panel-title {
+        color: #7e92ac;
         font-size: 0.72rem;
         font-weight: 700;
         letter-spacing: 0.07em;
         text-transform: uppercase;
-        color: #7e92ac;
         margin-bottom: 0.85rem;
     }
-
-    .panel-title span.count {
-        color: #4d6280;
-        font-weight: 500;
-        text-transform: none;
-        letter-spacing: 0;
-    }
-
-    /* ---------- KPI cards ---------- */
 
     .kpi-grid {
         display: grid;
@@ -2142,40 +1632,27 @@ render_html(
         margin-bottom: 1.1rem;
     }
 
-    @media (max-width: 1100px) {
-        .kpi-grid {
-            grid-template-columns: repeat(3, 1fr);
-        }
-    }
-
     .kpi-card {
-        background: #101d30;
-        border: 1px solid #1c2c42;
-        border-radius: 12px;
         padding: 0.85rem 1rem;
     }
 
     .kpi-label {
-        font-size: 0.72rem;
         color: #7e92ac;
-        font-weight: 500;
+        font-size: 0.72rem;
         margin-bottom: 0.3rem;
     }
 
     .kpi-value {
+        color: #f2f6fb;
         font-size: 1.35rem;
         font-weight: 800;
-        color: #f2f6fb;
-        letter-spacing: -0.01em;
     }
 
     .kpi-sub {
-        font-size: 0.72rem;
         color: #4d6280;
+        font-size: 0.72rem;
         margin-top: 0.15rem;
     }
-
-    /* ---------- pills ---------- */
 
     .pill {
         display: inline-block;
@@ -2187,36 +1664,29 @@ render_html(
     }
 
     .pill-good {
-        background: rgba(34, 197, 139, 0.14);
         color: #22c58b;
-        border: 1px solid rgba(34,197,139,0.35);
+        background: rgba(34, 197, 139, 0.14);
     }
 
     .pill-warn {
-        background: rgba(242, 169, 59, 0.14);
         color: #f2a93b;
-        border: 1px solid rgba(242,169,59,0.35);
+        background: rgba(242, 169, 59, 0.14);
     }
 
     .pill-bad {
-        background: rgba(229, 72, 77, 0.14);
         color: #f0787c;
-        border: 1px solid rgba(229,72,77,0.35);
+        background: rgba(229, 72, 77, 0.14);
     }
 
     .pill-info {
-        background: rgba(58, 160, 255, 0.14);
         color: #5eb3ff;
-        border: 1px solid rgba(58,160,255,0.35);
+        background: rgba(58, 160, 255, 0.14);
     }
 
     .pill-neutral {
-        background: rgba(126, 146, 172, 0.14);
         color: #9fb2c9;
-        border: 1px solid rgba(126,146,172,0.3);
+        background: rgba(126, 146, 172, 0.14);
     }
-
-    /* ---------- callouts ---------- */
 
     .callout {
         border-radius: 12px;
@@ -2225,36 +1695,9 @@ render_html(
         border: 1px solid;
     }
 
-    .callout-title {
-        font-size: 0.72rem;
-        font-weight: 800;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        margin-bottom: 0.3rem;
-    }
-
-    .callout-body {
-        font-size: 0.88rem;
-        color: #cddaea;
-        line-height: 1.45;
-    }
-
-    .callout-info {
-        background: rgba(58, 160, 255, 0.08);
-        border-color: rgba(58, 160, 255, 0.3);
-    }
-
-    .callout-info .callout-title {
-        color: #5eb3ff;
-    }
-
     .callout-good {
         background: rgba(34, 197, 139, 0.08);
         border-color: rgba(34, 197, 139, 0.3);
-    }
-
-    .callout-good .callout-title {
-        color: #22c58b;
     }
 
     .callout-warn {
@@ -2262,60 +1705,41 @@ render_html(
         border-color: rgba(242, 169, 59, 0.3);
     }
 
-    .callout-warn .callout-title {
-        color: #f2a93b;
+    .callout-info {
+        background: rgba(58, 160, 255, 0.08);
+        border-color: rgba(58, 160, 255, 0.3);
     }
 
-    /* ---------- data table ---------- */
-
-    table.urip-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.84rem;
-    }
-
-    table.urip-table th {
-        text-align: left;
-        color: #7e92ac;
-        font-weight: 600;
+    .callout-title {
+        color: #5eb3ff;
         font-size: 0.72rem;
+        font-weight: 800;
         text-transform: uppercase;
-        letter-spacing: 0.03em;
-        padding: 0.4rem 0.6rem;
-        border-bottom: 1px solid #1c2c42;
+        margin-bottom: 0.3rem;
     }
 
-    table.urip-table td {
-        padding: 0.5rem 0.6rem;
-        border-bottom: 1px solid #16233a;
-        color: #d7e1ee;
+    .callout-body {
+        color: #cddaea;
+        font-size: 0.88rem;
+        line-height: 1.45;
     }
 
-    table.urip-table tr:last-child td {
-        border-bottom: none;
+    .facility-name {
+        color: #f2f6fb;
+        font-size: 0.95rem;
+        font-weight: 700;
     }
 
-    table.urip-table td.num {
-        text-align: right;
-        font-variant-numeric: tabular-nums;
+    .facility-sub,
+    .muted {
+        color: #7e92ac;
+        font-size: 0.76rem;
     }
-
-    table.urip-table tr.is-recommended td {
-        background: rgba(34, 197, 139, 0.06);
-    }
-
-    /* ---------- facility card ---------- */
 
     .facility-block {
         margin-bottom: 1rem;
         padding-bottom: 0.9rem;
         border-bottom: 1px solid #16233a;
-    }
-
-    .facility-block:last-child {
-        border-bottom: none;
-        margin-bottom: 0;
-        padding-bottom: 0;
     }
 
     .facility-name-row {
@@ -2325,32 +1749,12 @@ render_html(
         margin-bottom: 0.2rem;
     }
 
-    .facility-name {
-        font-size: 0.95rem;
-        font-weight: 700;
-        color: #f2f6fb;
-    }
-
-    .facility-sub {
-        font-size: 0.76rem;
-        color: #7e92ac;
-        margin-bottom: 0.55rem;
-    }
-
-    /* ---------- insight list ---------- */
-
     .insight-row {
         display: flex;
-        align-items: flex-start;
         gap: 0.6rem;
         padding: 0.5rem 0;
-        border-bottom: 1px solid #16233a;
-        font-size: 0.86rem;
         color: #cddaea;
-    }
-
-    .insight-row:last-child {
-        border-bottom: none;
+        border-bottom: 1px solid #16233a;
     }
 
     .insight-dot {
@@ -2361,62 +1765,53 @@ render_html(
         flex-shrink: 0;
     }
 
-    .dot-good {
-        background: #22c58b;
+    .dot-good { background: #22c58b; }
+    .dot-warn { background: #f2a93b; }
+    .dot-bad { background: #e5484d; }
+    .dot-info { background: #3aa0ff; }
+    .dot-neutral { background: #9fb2c9; }
+
+    table.urip-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.84rem;
     }
 
-    .dot-warn {
-        background: #f2a93b;
-    }
-
-    .dot-bad {
-        background: #e5484d;
-    }
-
-    .dot-info {
-        background: #3aa0ff;
-    }
-
-    /* ---------- legend ---------- */
-
-    .legend-row {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        font-size: 0.8rem;
-        color: #cddaea;
-        margin-bottom: 0.35rem;
-    }
-
-    .legend-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        flex-shrink: 0;
-    }
-
-    /* ---------- misc ---------- */
-
-    .muted {
+    table.urip-table th {
         color: #7e92ac;
+        text-align: left;
+        font-size: 0.72rem;
+        padding: 0.4rem 0.6rem;
+        border-bottom: 1px solid #1c2c42;
+    }
+
+    table.urip-table td {
+        color: #d7e1ee;
+        padding: 0.5rem 0.6rem;
+        border-bottom: 1px solid #16233a;
+    }
+
+    table.urip-table td.num {
+        text-align: right;
+    }
+
+    table.urip-table tr.is-recommended td {
+        background: rgba(34, 197, 139, 0.06);
     }
 
     .model-note {
         color: #55688a;
         font-size: 0.78rem;
-        padding-top: 1rem;
-        border-top: 1px solid #1c2c42;
-        margin-top: 1.5rem;
         line-height: 1.5;
+        padding-top: 1rem;
+        margin-top: 1.5rem;
+        border-top: 1px solid #1c2c42;
     }
 
-    /* tighten native widget look */
-
-    div[data-testid="stSelectbox"] label,
-    div[data-testid="stRadio"] label {
-        color: #9fb2c9 !important;
-        font-size: 0.8rem !important;
-        font-weight: 600 !important;
+    @media (max-width: 1100px) {
+        .kpi-grid {
+            grid-template-columns: repeat(3, 1fr);
+        }
     }
     </style>
     """
@@ -2446,9 +1841,8 @@ render_html(
             <div>
                 📍 <b>Nairobi CBD</b>
                 &nbsp; • &nbsp;
-                {now.strftime("%-d %b %Y, %H:%M")}
+                {now.strftime("%d %b %Y, %H:%M")}
             </div>
-
             <div class="urip-badge">
                 FROZEN MODEL · {MODEL_FILE}
             </div>
@@ -2462,126 +1856,97 @@ render_html(
 # CONTROL BAR
 # ============================================================
 
-with st.container():
+ctrl_cols = st.columns([1.3, 1.3, 1.6, 1.8])
 
-    ctrl_cols = st.columns(
-        [1.3, 1.3, 1.6, 1.8]
+with ctrl_cols[0]:
+    scenario = st.selectbox(
+        "Rainfall scenario",
+        SCENARIOS,
+        index=0,
     )
 
-    with ctrl_cols[0]:
+rainfall = SCENARIO_RAINFALL[scenario]
 
-        scenario = st.selectbox(
-            "Rainfall scenario",
-            SCENARIOS,
-            index=0,
-        )
-
-    rainfall = SCENARIO_RAINFALL[
-        scenario
-    ]
-
-    with ctrl_cols[1]:
-
-        map_mode = st.radio(
-            "Map mode",
-            [
-                "Flood Scenario",
-                "Emergency Response",
-            ],
-            index=0,
-            horizontal=True,
-        )
-
-    model_scenario = resolve_model_scenario(
-        scenario
+with ctrl_cols[1]:
+    map_mode = st.radio(
+        "Map mode",
+        [
+            "Flood Scenario",
+            "Emergency Response",
+        ],
+        index=0,
+        horizontal=True,
     )
 
+model_scenario = resolve_model_scenario(scenario)
+
+incident_ids = sorted(
+    INCIDENT_REPORT[
+        INCIDENT_REPORT["scenario"]
+        .astype(str)
+        .str.strip()
+        == model_scenario
+    ]["incident_id"]
+    .dropna()
+    .astype(str)
+    .unique()
+    .tolist()
+)
+
+if not incident_ids:
     incident_ids = sorted(
-        INCIDENT_REPORT[
-            INCIDENT_REPORT["scenario"]
-            .astype(str)
-            .str.strip()
-            == model_scenario
-        ]["incident_id"]
+        INCIDENT_REPORT["incident_id"]
         .dropna()
         .astype(str)
         .unique()
         .tolist()
     )
 
-    if not incident_ids:
+# Prevent selectbox failure when the model has no incidents.
+if not incident_ids:
+    st.error(
+        "No emergency incidents are available "
+        "in the frozen model."
+    )
+    st.stop()
 
-        incident_ids = sorted(
-            INCIDENT_REPORT[
-                "incident_id"
-            ]
-            .dropna()
-            .astype(str)
-            .unique()
-            .tolist()
-        )
+# Correctly outside the `if not incident_ids` block.
+with ctrl_cols[2]:
+    incident_id = st.selectbox(
+        "Emergency incident",
+        incident_ids,
+        index=0,
+    )
 
-    # --------------------------------------------------------
-    # FIXED INDENTATION
-    # These controls must NOT be inside "if not incident_ids".
-    # --------------------------------------------------------
-
-    with ctrl_cols[2]:
-
-        incident_id = st.selectbox(
-            "Emergency incident",
-            incident_ids,
-            index=0,
-        )
-
-    with ctrl_cols[3]:
-
-        render_html(
-            f"""
-            <div style="padding-top: 1.7rem; font-size: 0.82rem;">
-                <span class="muted">
-                    Rainfall intensity
-                </span>
-
-                <b style="color:#e7edf5;">
-                    {rainfall} mm/hr
-                </b>
-
-                &nbsp;·&nbsp;
-
-                <span class="muted">
-                    Map mode
-                </span>
-
-                <b style="color:#e7edf5;">
-                    {map_mode}
-                </b>
-            </div>
-            """
-        )
+with ctrl_cols[3]:
+    render_html(
+        f"""
+        <div style="padding-top: 1.7rem; font-size: 0.82rem;">
+            <span class="muted">Rainfall intensity</span>
+            <b style="color:#e7edf5;">
+                {rainfall} mm/hr
+            </b>
+            &nbsp;·&nbsp;
+            <span class="muted">Map mode</span>
+            <b style="color:#e7edf5;">
+                {map_mode}
+            </b>
+        </div>
+        """
+    )
 
 
 # ============================================================
-# GET CURRENT DATA
+# CURRENT DATA
 # ============================================================
 
-kpis = get_dashboard_kpis(
-    scenario
-)
-
-kpi_row = get_emergency_kpi(
-    scenario
-)
-
-situation = get_situation(
-    scenario
-)
-
+kpis = get_dashboard_kpis(scenario)
+kpi_row = get_emergency_kpi(scenario)
+situation = get_situation(scenario)
 incident_report = get_incident_report(
     scenario,
     incident_id,
 )
-
 facility_options = get_facility_options(
     scenario,
     incident_id,
@@ -2593,102 +1958,67 @@ facility_options = get_facility_options(
 # ============================================================
 
 kpi_defs = [
-
     (
         "Flood Impact",
-        fmt_number(
-            kpis["flood_impact"],
-            3,
-        ),
+        fmt_number(kpis["flood_impact"], 3),
         "mean index",
     ),
-
     (
         "Roads Affected",
-        fmt_number(
-            kpis["roads_affected"]
-        ),
+        fmt_number(kpis["roads_affected"]),
         f"of {len(get_roads(scenario))} segments",
     ),
-
     (
         "Roads Closed",
-        fmt_number(
-            kpis["roads_closed"]
-        ),
+        fmt_number(kpis["roads_closed"]),
         "fully impassable",
     ),
-
     (
         "Facilities Affected",
-        fmt_number(
-            kpis["facilities_affected"]
-        ),
+        fmt_number(kpis["facilities_affected"]),
         "operationally",
     ),
-
     (
         "Population Exposed",
-        fmt_number(
-            kpis["population_exposed"]
-        ),
+        fmt_number(kpis["population_exposed"]),
         "residents",
     ),
-
     (
         "Mean Response Time",
-        fmt_minutes(
-            kpis["mean_response"]
-        ),
+        fmt_minutes(kpis["mean_response"]),
         "citywide",
     ),
 ]
 
-
 kpi_html = '<div class="kpi-grid">'
 
 for label, value, sub in kpi_defs:
-
     kpi_html += (
-        f'<div class="kpi-card">'
+        '<div class="kpi-card">'
         f'<div class="kpi-label">{label}</div>'
         f'<div class="kpi-value">{value}</div>'
         f'<div class="kpi-sub">{sub}</div>'
-        f"</div>"
+        "</div>"
     )
 
 kpi_html += "</div>"
-
-render_html(
-    kpi_html
-)
+render_html(kpi_html)
 
 
 # ============================================================
-# SITUATION + INCIDENT SUMMARY ROW
+# SITUATION AND INCIDENT SUMMARY
 # ============================================================
 
-left_col, right_col = st.columns(
-    [1.35, 1]
-)
-
+left_col, right_col = st.columns([1.35, 1])
 
 with left_col:
-
     alert = (
-        kpi_row.get(
-            "emergency_alert",
-            None,
-        )
+        kpi_row.get("emergency_alert", None)
         if len(kpi_row)
         else None
     )
 
-    if (
-        alert is not None
-        and not pd.isna(alert)
-    ):
-
+    if alert is not None and not pd.isna(alert):
         callout_kind = (
             "callout-info"
             if scenario == "Normal"
@@ -2701,7 +2031,6 @@ with left_col:
                 <div class="callout-title">
                     Current Situation
                 </div>
-
                 <div class="callout-body">
                     {alert}
                 </div>
@@ -2710,7 +2039,6 @@ with left_col:
         )
 
     status_fields = [
-
         (
             "Situation",
             situation.get(
@@ -2718,7 +2046,6 @@ with left_col:
                 "—",
             ),
         ),
-
         (
             "Response network",
             situation.get(
@@ -2726,7 +2053,6 @@ with left_col:
                 "—",
             ),
         ),
-
         (
             "Facility status",
             situation.get(
@@ -2734,7 +2060,6 @@ with left_col:
                 "—",
             ),
         ),
-
         (
             "Route availability",
             fmt_pct(
@@ -2749,133 +2074,99 @@ with left_col:
     status_html = (
         '<div class="panel">'
         '<div class="panel-title">'
-        'Emergency Situation'
-        '</div>'
-    )
-
-    status_html += (
+        "Emergency Situation"
+        "</div>"
         '<div class="kpi-grid" '
         'style="grid-template-columns:repeat(4,1fr);">'
     )
 
     for title, value in status_fields:
-
         status_html += (
-            f'<div class="kpi-card">'
+            '<div class="kpi-card">'
             f'<div class="kpi-label">{title}</div>'
-            f'<div class="kpi-value" '
-            f'style="font-size:1.05rem;">'
-            f'{value}'
-            f'</div>'
-            f"</div>"
+            '<div class="kpi-value" '
+            'style="font-size:1.05rem;">'
+            f"{value}"
+            "</div>"
+            "</div>"
         )
 
-    status_html += (
-        "</div></div>"
-    )
-
-    render_html(
-        status_html
-    )
+    status_html += "</div></div>"
+    render_html(status_html)
 
     secondary_defs = [
-
         (
             "Access Disrupted",
-            fmt_number(
-                kpis["access_disrupted"]
-            ),
+            fmt_number(kpis["access_disrupted"]),
         ),
-
         (
             "Priority Population",
-            fmt_number(
-                kpis["priority_population"]
-            ),
+            fmt_number(kpis["priority_population"]),
         ),
-
         (
             "High Priority",
-            fmt_number(
-                kpis["high_priority"]
-            ),
+            fmt_number(kpis["high_priority"]),
         ),
-
         (
             "Mean V/C Ratio",
-            fmt_number(
-                kpis["mean_vc"],
-                3,
-            ),
+            fmt_number(kpis["mean_vc"], 3),
         ),
     ]
 
     secondary_html = (
         '<div class="panel">'
         '<div class="panel-title">'
-        'Population &amp; Network Load'
-        '</div>'
-    )
-
-    secondary_html += (
+        "Population &amp; Network Load"
+        "</div>"
         '<div class="kpi-grid" '
         'style="grid-template-columns:repeat(4,1fr);">'
     )
 
     for title, value in secondary_defs:
-
         secondary_html += (
-            f'<div class="kpi-card">'
+            '<div class="kpi-card">'
             f'<div class="kpi-label">{title}</div>'
-            f'<div class="kpi-value" '
-            f'style="font-size:1.05rem;">'
-            f'{value}'
-            f'</div>'
-            f"</div>"
+            '<div class="kpi-value" '
+            'style="font-size:1.05rem;">'
+            f"{value}"
+            "</div>"
+            "</div>"
         )
 
-    secondary_html += (
-        "</div></div>"
-    )
-
-    render_html(
-        secondary_html
-    )
+    secondary_html += "</div></div>"
+    render_html(secondary_html)
 
 
 with right_col:
-
     incident_lat, incident_lon = get_incident_coords(
         incident_id
     )
 
-    coord_text = (
-        f"{incident_lat:.4f}, {incident_lon:.4f}"
-        if (
-            incident_lat is not None
-            and incident_lon is not None
+    if (
+        incident_lat is not None
+        and incident_lon is not None
+    ):
+        coord_text = (
+            f"{incident_lat:.4f}, "
+            f"{incident_lon:.4f}"
         )
-        else "—"
-    )
+    else:
+        coord_text = "—"
 
     incident_html = (
         '<div class="panel">'
         '<div class="panel-title">'
-        'Selected Incident'
-        '</div>'
-
-        f'<div class="facility-name" '
-        f'style="margin-bottom:0.2rem;">'
-        f'{incident_id}'
-        f'</div>'
-
+        "Selected Incident"
+        "</div>"
+        f'<div class="facility-name">'
+        f"{incident_id}"
+        "</div>"
         f'<div class="facility-sub">'
-        f'Nairobi CBD &nbsp;·&nbsp; {scenario}'
-        f'</div>'
+        f"Nairobi CBD &nbsp;·&nbsp; {scenario}"
+        "</div>"
     )
 
     if len(incident_report):
-
         flood_class = str(
             incident_report.get(
                 "incident_flood_class",
@@ -2888,54 +2179,35 @@ with right_col:
             "Moderate": "warn",
             "High": "bad",
             "Very High": "bad",
-        }.get(
-            flood_class,
-            "neutral",
-        )
+        }.get(flood_class, "neutral")
 
         incident_html += (
-    '<div style="margin: 0.6rem 0;">'
-    + pill(
-        f"{flood_class} flood risk",
-        flood_class_kind
-    )
-    + "</div>"
-)
-
+            '<div style="margin:0.6rem 0;">'
+            f"{pill(flood_class + ' flood risk', flood_class_kind)}"
+            "</div>"
             '<div style="font-size:0.82rem; '
             'color:#9fb2c9; line-height:1.9;">'
-
-            f'Flood impact &nbsp;'
-            f'<b style="color:#e7edf5;">'
-            f'{fmt_number(incident_report.get("incident_flood_impact", np.nan), 3)}'
-            f'</b><br>'
-
-            f'Catchment population &nbsp;'
-            f'<b style="color:#e7edf5;">'
-            f'{fmt_number(incident_report.get("population_in_catchment", np.nan))}'
-            f'</b><br>'
-
-            f'Priority population &nbsp;'
-            f'<b style="color:#e7edf5;">'
-            f'{fmt_number(incident_report.get("priority_population", np.nan))}'
-            f'</b><br>'
-
-            f'Coordinates &nbsp;'
-            f'<b style="color:#e7edf5;">'
-            f'{coord_text}'
-            f'</b>'
-
+            f"Flood impact &nbsp;<b>"
+            f"{fmt_number(incident_report.get('incident_flood_impact', np.nan), 3)}"
+            "</b><br>"
+            f"Catchment population &nbsp;<b>"
+            f"{fmt_number(incident_report.get('population_in_catchment', np.nan))}"
+            "</b><br>"
+            f"Priority population &nbsp;<b>"
+            f"{fmt_number(incident_report.get('priority_population', np.nan))}"
+            "</b><br>"
+            f"Coordinates &nbsp;<b>"
+            f"{coord_text}"
+            "</b>"
             "</div>"
         )
 
     incident_html += "</div>"
+    render_html(incident_html)
 
-    render_html(
-        incident_html
-    )
+    recommended_facility_id = None
 
     if len(incident_report):
-
         recommended_facility = incident_report.get(
             "recommended_facility_name",
             None,
@@ -2966,8 +2238,7 @@ with right_col:
         route_length_text = (
             "—"
             if np.isnan(route_length)
-            else fmt_number(route_length)
-            + " m"
+            else fmt_number(route_length) + " m"
         )
 
         render_html(
@@ -2976,40 +2247,30 @@ with right_col:
                 <div class="callout-title">
                     Recommended Route
                 </div>
-
                 <div class="callout-body">
                     Dispatch via
                     <b style="color:#e7edf5;">
                         {recommended_facility or "—"}
                     </b>
                     for minimal delay and flood exposure.
-
                     <br><br>
-
                     <span class="muted">
                         Facility response
                     </span>
-
                     <b style="color:#e7edf5;">
                         {fmt_minutes(recommended_response)}
                     </b>
-
                     &nbsp;·&nbsp;
-
                     <span class="muted">
                         Route response
                     </span>
-
                     <b style="color:#e7edf5;">
                         {fmt_minutes(recommended_route_time)}
                     </b>
-
                     &nbsp;·&nbsp;
-
                     <span class="muted">
                         Route length
                     </span>
-
                     <b style="color:#e7edf5;">
                         {route_length_text}
                     </b>
@@ -3018,27 +2279,18 @@ with right_col:
             """
         )
 
-    else:
-
-        recommended_facility_id = None
-
 
 # ============================================================
-# MAP + INSIGHTS
+# MAP AND INSIGHTS
 # ============================================================
 
-map_col, insight_col = st.columns(
-    [2.3, 1]
-)
-
+map_col, insight_col = st.columns([2.3, 1])
 
 with map_col:
-
     render_html(
-        '<div class="panel-title" '
-        'style="margin-top:0.4rem;">'
-        'Spatial Intelligence'
-        '</div>'
+        '<div class="panel-title">'
+        "Spatial Intelligence"
+        "</div>"
     )
 
     fmap = build_map(
@@ -3057,7 +2309,6 @@ with map_col:
 
 
 with insight_col:
-
     insights = []
 
     roads_affected = safe_int(
@@ -3066,28 +2317,19 @@ with insight_col:
     )
 
     if roads_affected >= 0:
-
-        total_roads = len(
-            get_roads(scenario)
-        )
-
-        pct = (
-            roads_affected
-            / total_roads
-            * 100
+        total_roads = len(get_roads(scenario))
+        percentage = (
+            roads_affected / total_roads * 100
             if total_roads
             else 0
         )
 
         insights.append(
             (
-                f"{roads_affected} of "
-                f"{total_roads} road segments "
-                f"are affected ({pct:.0f}% "
-                f"of the network).",
-                "warn"
-                if roads_affected
-                else "good",
+                f"{roads_affected} of {total_roads} "
+                f"road segments are affected "
+                f"({percentage:.0f}% of the network).",
+                "warn" if roads_affected else "good",
             )
         )
 
@@ -3097,11 +2339,10 @@ with insight_col:
     )
 
     if roads_closed > 0:
-
         insights.append(
             (
-                f"{roads_closed} road segments "
-                f"are fully closed to traffic.",
+                f"{roads_closed} road segments are "
+                "fully closed to traffic.",
                 "bad",
             )
         )
@@ -3112,28 +2353,24 @@ with insight_col:
     )
 
     if facilities_affected >= 0:
-
         insights.append(
             (
-                f"{facilities_affected} emergency "
-                f"facilities are operationally affected.",
-                "warn"
-                if facilities_affected
-                else "good",
+                f"{facilities_affected} emergency facilities "
+                "are operationally affected.",
+                "warn" if facilities_affected else "good",
             )
         )
 
-    pop_exposed = safe_int(
+    population_exposed = safe_int(
         kpis["population_exposed"],
         -1,
     )
 
-    if pop_exposed > 0:
-
+    if population_exposed > 0:
         insights.append(
             (
-                f"{pop_exposed:,} people are in "
-                f"flood-exposed areas within the CBD.",
+                f"{population_exposed:,} people are in "
+                "flood-exposed areas within the CBD.",
                 "info",
             )
         )
@@ -3142,21 +2379,16 @@ with insight_col:
         kpis["mean_response"]
     )
 
-    if not np.isnan(
-        mean_response
-    ):
-
+    if not np.isnan(mean_response):
         insights.append(
             (
-                f"Mean citywide emergency "
-                f"response time is "
-                f"{fmt_minutes(mean_response)}.",
+                "Mean citywide emergency response time "
+                f"is {fmt_minutes(mean_response)}.",
                 "info",
             )
         )
 
     if not insights:
-
         insights.append(
             (
                 "No frozen scenario insights are "
@@ -3168,68 +2400,61 @@ with insight_col:
     insight_html = (
         '<div class="panel">'
         '<div class="panel-title">'
-        'Key Insights'
-        '</div>'
+        "Key Insights"
+        "</div>"
     )
 
     for text, kind in insights:
-
         insight_html += (
-            f'<div class="insight-row">'
-            f'<div class="insight-dot dot-{kind}">'
-            f'</div>'
-            f'<div>{text}</div>'
-            f'</div>'
+            '<div class="insight-row">'
+            f'<div class="insight-dot dot-{kind}"></div>'
+            f"<div>{text}</div>"
+            "</div>"
         )
 
     insight_html += "</div>"
-
-    render_html(
-        insight_html
-    )
+    render_html(insight_html)
 
     legend_html = (
         '<div class="panel">'
         '<div class="panel-title">'
-        'Road Passability Legend'
-        '</div>'
+        "Road Passability Legend"
+        "</div>"
     )
 
     for status, color in ROAD_COLORS.items():
-
         legend_html += (
-            f'<div class="legend-row">'
-            f'<div class="legend-dot" '
-            f'style="background:{color};">'
-            f'</div>'
-            f'{status}'
-            f'</div>'
+            '<div style="display:flex; '
+            'align-items:center; gap:0.5rem; '
+            'margin-bottom:0.35rem; '
+            'color:#cddaea; font-size:0.8rem;">'
+            f'<div style="width:10px;height:10px;'
+            f'border-radius:50%;background:{color};">'
+            "</div>"
+            f"{status}"
+            "</div>"
         )
 
     legend_html += "</div>"
-
-    render_html(
-        legend_html
-    )
+    render_html(legend_html)
 
 
 # ============================================================
-# FACILITY OPTIONS + ROUTES
+# FACILITY AND ROUTE COMPARISON
 # ============================================================
 
 render_html(
-    f'<div class="panel-title" '
-    f'style="margin-top:0.3rem;">'
-    f'Facility &amp; Route Comparison '
-    f'<span class="count">'
-    f'— {incident_id}, {scenario}'
-    f'</span>'
-    f'</div>'
+    f"""
+    <div class="panel-title">
+        Facility &amp; Route Comparison
+        <span class="muted">
+            — {incident_id}, {scenario}
+        </span>
+    </div>
+    """
 )
 
-
 if len(facility_options) == 0:
-
     render_html(
         '<div class="panel">'
         '<span class="muted">'
@@ -3238,28 +2463,17 @@ if len(facility_options) == 0:
         "</span>"
         "</div>"
     )
-
 else:
-
-    blocks_html = (
-        '<div class="panel">'
-    )
+    blocks_html = '<div class="panel">'
 
     for _, facility in facility_options.iterrows():
-
         facility_rank = safe_int(
-            facility.get(
-                "facility_rank",
-                np.nan,
-            ),
+            facility.get("facility_rank", np.nan),
             0,
         )
 
         facility_id = str(
-            facility.get(
-                "facility_id",
-                "",
-            )
+            facility.get("facility_id", "")
         )
 
         facility_name = str(
@@ -3297,7 +2511,7 @@ else:
             )
         )
 
-        reachable = bool(
+        reachable = safe_bool(
             facility.get(
                 "reachable",
                 False,
@@ -3309,42 +2523,30 @@ else:
             == facility_id
         )
 
-        f_label, f_kind = facility_status(
+        facility_label, facility_kind = facility_status(
             reachable,
             delay,
         )
 
         if is_recommended:
-
-            f_label = "Recommended"
-            f_kind = "info"
+            facility_label = "Recommended"
+            facility_kind = "info"
 
         blocks_html += (
-
             '<div class="facility-block">'
-
             '<div class="facility-name-row">'
-
             f'<div class="facility-name">'
-            f'#{facility_rank} &nbsp;'
-            f'{facility_name}'
-            f'</div>'
-
-            f'{pill(f_label, f_kind)}'
-
+            f"#{facility_rank} &nbsp;{facility_name}"
             "</div>"
-
+            f"{pill(facility_label, facility_kind)}"
+            "</div>"
             f'<div class="facility-sub">'
-            f'{facility_type}'
-            f' &nbsp;·&nbsp; '
-            f'{facility_id}'
-            f' &nbsp;·&nbsp; response '
-            f'{fmt_minutes(travel_time)}'
-            f' (normal '
-            f'{fmt_minutes(normal_time)}, '
-            f'delay '
-            f'{fmt_minutes(delay)})'
-            f'</div>'
+            f"{facility_type} &nbsp;·&nbsp; {facility_id}"
+            f"&nbsp;·&nbsp; response "
+            f"{fmt_minutes(travel_time)} "
+            f"(normal {fmt_minutes(normal_time)}, "
+            f"delay {fmt_minutes(delay)})"
+            "</div>"
         )
 
         route_options = get_route_options(
@@ -3354,32 +2556,27 @@ else:
         )
 
         if len(route_options) == 0:
-
             blocks_html += (
                 '<span class="muted">'
-                'No frozen route alternative is '
-                'available for this facility.'
-                '</span>'
+                "No frozen route alternative is "
+                "available for this facility."
+                "</span>"
             )
-
         else:
-
             blocks_html += (
                 '<table class="urip-table">'
-                '<thead><tr>'
-                '<th>Route</th>'
+                "<thead><tr>"
+                "<th>Route</th>"
                 '<th class="num">Response</th>'
                 '<th class="num">Length</th>'
                 '<th class="num">Affected</th>'
                 '<th class="num">Closed</th>'
                 '<th class="num">Delay</th>'
-                '<th>Status</th>'
-                '</tr></thead>'
-                '<tbody>'
+                "<th>Status</th>"
+                "</tr></thead><tbody>"
             )
 
             for _, route in route_options.iterrows():
-
                 route_rank = safe_int(
                     route.get(
                         "route_rank",
@@ -3425,19 +2622,21 @@ else:
                     )
                 )
 
+                recommended_route_rank = safe_int(
+                    incident_report.get(
+                        "route_rank",
+                        1,
+                    ),
+                    1,
+                )
+
                 route_is_recommended = (
                     is_recommended
                     and route_rank
-                    == safe_int(
-                        incident_report.get(
-                            "route_rank",
-                            1,
-                        ),
-                        1,
-                    )
+                    == recommended_route_rank
                 )
 
-                r_label, r_kind = route_status(
+                route_label, route_kind = route_status(
                     delay_pct,
                     closed_segments,
                     route_is_recommended,
@@ -3450,37 +2649,24 @@ else:
                 )
 
                 blocks_html += (
-
                     f'<tr class="{row_class}">'
-
-                    f"<td>"
-                    f"Route {route_rank}"
-                    f"</td>"
-
+                    f"<td>Route {route_rank}</td>"
                     f'<td class="num">'
-                    f'{fmt_minutes(response_time)}'
-                    f'</td>'
-
+                    f"{fmt_minutes(response_time)}"
+                    "</td>"
                     f'<td class="num">'
-                    f'{fmt_number(route_length)} m'
-                    f'</td>'
-
+                    f"{fmt_number(route_length)} m"
+                    "</td>"
                     f'<td class="num">'
-                    f'{affected_segments}'
-                    f'</td>'
-
+                    f"{affected_segments}"
+                    "</td>"
                     f'<td class="num">'
-                    f'{closed_segments}'
-                    f'</td>'
-
+                    f"{closed_segments}"
+                    "</td>"
                     f'<td class="num">'
-                    f'{fmt_pct(delay_pct)}'
-                    f'</td>'
-
-                    f"<td>"
-                    f"{pill(r_label, r_kind)}"
-                    f"</td>"
-
+                    f"{fmt_pct(delay_pct)}"
+                    "</td>"
+                    f"<td>{pill(route_label, route_kind)}</td>"
                     "</tr>"
                 )
 
@@ -3488,17 +2674,10 @@ else:
                 "</tbody></table>"
             )
 
-        blocks_html += (
-            "</div>"
-        )
+        blocks_html += "</div>"
 
-    blocks_html += (
-        "</div>"
-    )
-
-    render_html(
-        blocks_html
-    )
+    blocks_html += "</div>"
+    render_html(blocks_html)
 
 
 # ============================================================
@@ -3506,39 +2685,32 @@ else:
 # ============================================================
 
 render_html(
-    '<div class="panel-title" '
-    'style="margin-top:0.3rem;">'
-    'Scenario Comparison'
-    '</div>'
+    '<div class="panel-title">'
+    "Scenario Comparison"
+    "</div>"
 )
 
-
-scenario_rows_html = [
-
+scenario_metrics = [
     (
         "Situation",
         "situation_status",
         "text",
     ),
-
     (
         "Mean flood impact",
         "mean_flood_impact",
         "num3",
     ),
-
     (
         "High / very high incidents",
         "high_very_high_incidents",
         "int",
     ),
-
     (
         "Mean response time",
         "mean_response_time_min",
         "min",
     ),
-
     (
         "Route availability",
         "route_availability_pct",
@@ -3546,107 +2718,74 @@ scenario_rows_html = [
     ),
 ]
 
-
 table_html = (
     '<div class="panel">'
     '<table class="urip-table">'
-    '<thead><tr>'
-    '<th>Metric</th>'
+    "<thead><tr><th>Metric</th>"
 )
 
+for scenario_name in SCENARIOS:
+    table_html += f"<th>{scenario_name}</th>"
 
-for s in SCENARIOS:
+table_html += "</tr></thead><tbody>"
 
-    table_html += (
-        f"<th>{s}</th>"
-    )
+for label, field, kind in scenario_metrics:
+    table_html += f"<tr><td>{label}</td>"
 
-
-table_html += (
-    "</tr></thead><tbody>"
-)
-
-
-for label, field, kind in scenario_rows_html:
-
-    table_html += (
-        f"<tr><td>{label}</td>"
-    )
-
-    for s in SCENARIOS:
-
+    for scenario_name in SCENARIOS:
         row = get_emergency_kpi(
-            s
+            scenario_name
         )
 
         raw = (
-            row.get(
-                field,
-                np.nan,
-            )
+            row.get(field, np.nan)
             if len(row)
             else np.nan
         )
 
         if kind == "text":
+            if raw is None or pd.isna(raw):
+                cell = "—"
+            else:
+                cell = str(raw)
 
-            cell = (
-                str(raw)
-                if (
-                    raw is not None
-                    and not pd.isna(raw)
-                )
-                else "—"
-            )
-
-            table_html += (
-                f"<td>{cell}</td>"
-            )
+            table_html += f"<td>{cell}</td>"
 
         elif kind == "num3":
-
             table_html += (
                 f'<td class="num">'
-                f'{fmt_number(raw, 3)}'
-                f'</td>'
+                f"{fmt_number(raw, 3)}"
+                "</td>"
             )
 
         elif kind == "int":
-
             table_html += (
                 f'<td class="num">'
-                f'{safe_int(raw, 0)}'
-                f'</td>'
+                f"{safe_int(raw, 0)}"
+                "</td>"
             )
 
         elif kind == "min":
-
             table_html += (
                 f'<td class="num">'
-                f'{fmt_minutes(raw)}'
-                f'</td>'
+                f"{fmt_minutes(raw)}"
+                "</td>"
             )
 
         elif kind == "pct":
-
             table_html += (
                 f'<td class="num">'
-                f'{fmt_pct(raw)}'
-                f'</td>'
+                f"{fmt_pct(raw)}"
+                "</td>"
             )
 
-    table_html += (
-        "</tr>"
-    )
-
+    table_html += "</tr>"
 
 table_html += (
     "</tbody></table></div>"
 )
 
-render_html(
-    table_html
-)
+render_html(table_html)
 
 
 # ============================================================
@@ -3657,16 +2796,17 @@ render_html(
     """
     <div class="model-note">
         <b>URIP frozen-model dashboard.</b>
-        All flood, road disruption, passability, traffic, rerouting,
-        facility, population and emergency-response outputs shown here
-        are read from the frozen analytical package. The Streamlit
-        interface does not recalculate the analytical model.
+        All flood, road disruption, passability, traffic,
+        rerouting, facility, population, and emergency-response
+        outputs shown here are read from the frozen analytical
+        package. The Streamlit interface does not recalculate
+        the analytical model.
         <br><br>
         Emergency routing represents modelled network routing.
-        Route alternatives shown are the frozen alternatives generated
-        by the URIP routing model. Affected route segments indicate
-        flood-affected segments and do not necessarily mean that the
-        segment is closed.
+        Route alternatives shown are the frozen alternatives
+        generated by the URIP routing model. Affected route
+        segments indicate flood-affected segments and do not
+        necessarily mean that the segment is closed.
     </div>
     """
 )
