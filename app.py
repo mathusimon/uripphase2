@@ -414,7 +414,31 @@ def get_dashboard_kpis(scenario):
             roads_closed = pd.to_numeric(roads["passability"], errors="coerce").eq(0).sum()
 
         if "final_vc_ratio" in roads.columns:
-            mean_vc = pd.to_numeric(roads["final_vc_ratio"], errors="coerce").mean()
+
+    vc_values = pd.to_numeric(
+        roads["final_vc_ratio"],
+        errors="coerce"
+    )
+
+    # Remove invalid values only.
+    vc_values = vc_values.replace(
+        [np.inf, -np.inf],
+        np.nan
+    ).dropna()
+
+    if not vc_values.empty:
+        mean_vc = float(vc_values.mean())
+    else:
+        mean_vc = np.nan
+
+    st.write(
+    "DEBUG V/C:",
+    mean_vc,
+    "valid values:",
+    len(vc_values) if "vc_values" in locals() else 0,
+    "traffic columns:",
+    list(roads.columns)
+)
 
     # --------------------------------------------------------
     # Facilities affected
